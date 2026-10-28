@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "color_space": "Lab",
+  "color_correction": true,
+  "blend_mode": "feather",
+  "feather_px": 3,
+  "evaluate_ssim": true
+}
+

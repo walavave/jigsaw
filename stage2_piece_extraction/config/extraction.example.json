@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "expected_piece_count": 16,
+  "ignore_border_mm": 45,
+  "min_piece_area_px": 2000,
+  "min_quality": 0.85,
+  "piece_output_size_px": 512
+}
+

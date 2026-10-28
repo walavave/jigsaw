@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Packaging and builds
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test, lint, and type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Temporary and local files
+tmp/
+*.log
+.env
+.env.*
+!.env.example
+
+# Stage outputs are reproducible; keep their README files
+stage*/output/*
+!stage*/output/README.md
+
+# Large raw calibration and capture images stay local
+stage*/input/calibration/*
+stage*/input/raw/*
+!stage*/input/calibration/README.md
+!stage*/input/raw/README.md
+
+# Optional deep-learning model weights
+checkpoints/
+weights/
+*.pt
+*.pth
+*.onnx
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~

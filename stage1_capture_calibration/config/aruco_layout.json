@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "dictionary": "DICT_4X4_50",
+  "workspace_mm": [400, 280],
+  "canvas_px": [3200, 2240],
+  "content_margin_mm": 45,
+  "markers": [
+    {
+      "id": 0,
+      "center_mm": [25, 25]
+    },
+    {
+      "id": 1,
+      "center_mm": [375, 25]
+    },
+    {
+      "id": 2,
+      "center_mm": [375, 255]
+    },
+    {
+      "id": 3,
+      "center_mm": [25, 255]
+    }
+  ]
+}
