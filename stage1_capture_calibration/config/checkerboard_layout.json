@@ -1,9 +1,9 @@
 {
   "schema_version": "1.0",
-  "cols": 9,
-  "rows": 6,
-  "square_mm": 18,
-  "workspace_mm": [400, 280],
-  "canvas_px": [3200, 2240],
-  "board_outer_origin_mm": [110, 77]
+  "cols": 6,
+  "rows": 8,
+  "square_mm": 25,
+  "workspace_mm": [330, 330],
+  "canvas_px": [2640, 2640],
+  "board_outer_origin_mm": [77.5, 52.5]
 }

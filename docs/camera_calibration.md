@@ -63,16 +63,18 @@ RealSense 的出厂内参通常足以支持本项目的工作距离和二维平�
 3. 拍 15-25 张。覆盖画面中心和四角，并改变标定板倾斜角度。
 4. 照片放入 `stage1_capture_calibration/input/calibration/`。
 
-默认靶纸为 9 x 6 个**内角点**、方格边长 18 mm。这里的“内角点”不是黑白方格总数；如果使用别的靶纸，必须同步修改参数。
+默认靶纸为纵向 A4 上的 6 x 8 个**内角点**、方格边长 25 mm。这里的“内角点”不是黑白方格总数；如果使用别的靶纸，必须同步修改参数。
+
+手机照片可能混有竖拍和横拍，表现为同一批图片中像素尺寸有的是 `1279 x 1706`，有的是 `1706 x 1279`。标定器会先应用 EXIF 方向，再把长宽互换的照片旋转 90° 到首张照片的坐标系；实际旋转记录在 `intrinsics.json` 的 `orientation_normalization` 字段中。
 
 运行：
 
 ```bash
 python3 stage1_capture_calibration/calibrate_intrinsics.py \
   --images stage1_capture_calibration/input/calibration \
-  --cols 9 \
-  --rows 6 \
-  --square-mm 18
+  --cols 6 \
+  --rows 8 \
+  --square-mm 25
 ```
 
 输出：
@@ -97,16 +99,16 @@ stage1_capture_calibration/output/calibration/
 
 ```json
 {
-  "cols": 9,
-  "rows": 6,
-  "square_mm": 18,
-  "workspace_mm": [400, 280],
-  "canvas_px": [3200, 2240],
-  "board_outer_origin_mm": [110, 77]
+  "cols": 6,
+  "rows": 8,
+  "square_mm": 25,
+  "workspace_mm": [330, 330],
+  "canvas_px": [2640, 2640],
+  "board_outer_origin_mm": [77.5, 52.5]
 }
 ```
 
-棋盘格的外框尺寸是 `(9+1) x (6+1)` 个方格，即 `180 x 126 mm`。`board_outer_origin_mm` 指的是棋盘格**最外层黑白方格的外框左上角**在工作区毫米坐标中的位置。默认值让棋盘格居中。
+棋盘格的外框尺寸是 `(6+1) x (8+1)` 个方格，即 `175 x 225 mm`。`board_outer_origin_mm` 指的是棋盘格**最外层黑白方格的外框左上角**在工作区毫米坐标中的位置。当前配置使用 `330 x 330 mm` 工作区，让纵向棋盘格居中，并覆盖 16 块碎片约 `289 x 290 mm` 的散落范围。
 
 布置要求：
 
@@ -181,7 +183,7 @@ python3 stage1_capture_calibration/rectify_capture.py \
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| 棋盘格检测不到 | 参数写成方格总数，或靶纸反光、弯曲 | 确认 9 x 6 是内角点；换平整哑光纸 |
+| 棋盘格检测不到 | 参数写成方格总数，或靶纸反光、弯曲 | 确认 6 x 8 是内角点；换平整哑光纸 |
 | 内参 RMS 很大 | 姿态单一、模糊、靶纸翘曲 | 重拍中心和四角的倾斜视图 |
 | `plane.jpg` 检测不到 | 棋盘格没有完整入镜或尺寸参数错误 | 让整块板入镜；同步修改 cols、rows、square-mm |
 | 矫正后方向颠倒 | 棋盘格相对相机旋转了 180 度 | 按正常俯拍方向摆正；不要旋转 90 度 |

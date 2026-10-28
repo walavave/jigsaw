@@ -311,7 +311,7 @@ reference/
 推荐使用固定俯拍支架：
 
 - 工作区：`450 mm x 450 mm` 至 `500 mm x 500 mm` 的哑光深绿、深灰或黑色背景板。
-- 主流程使用一张平放的 `9 x 6`、边长 `18 mm` 棋盘格估计桌面单应；ArUco 仅为可选路线。
+- 主流程使用一张纵向 A4 的 `6 x 8`、边长 `25 mm` 棋盘格估计桌面单应；ArUco 仅为可选路线。
 - 棋盘格长边要与工作区 `x` 轴平行，外框左上角放在 `checkerboard_layout.json` 指定的位置。
 - 相机光轴尽量垂直于桌面；可以使用水平仪或俯拍支架。
 - 相机使用固定焦距、固定 ISO、固定快门、固定白平衡、手动对焦。
@@ -372,12 +372,14 @@ python3 stage1_capture_calibration/make_calibration_board.py
 ```bash
 python3 stage1_capture_calibration/calibrate_intrinsics.py \
   --images stage1_capture_calibration/input/calibration \
-  --cols 9 \
-  --rows 6 \
-  --square-mm 18
+  --cols 6 \
+  --rows 8 \
+  --square-mm 25
 ```
 
 输出同一路径的 `intrinsics.json` 和 `undistorted_example.png`。检查 RMS 重投影误差，第一版目标可设为小于 `1.0 px`。如果相机或手机改变了分辨率、变焦倍率、对焦模式，必须重新标定；不能把一种分辨率的参数直接用于另一种分辨率。
+
+标定器会读取照片的 EXIF 方向；如果同一批照片中混有手机横拍和竖拍、像素长宽互换的棋盘格图，程序会把它们旋转到首张照片的坐标系后继续检测。`intrinsics.json` 的 `orientation_normalization` 会记录每张被旋转的图片和角度。
 
 #### 3.6.2 俯视单应矫正
 
@@ -397,16 +399,16 @@ rectified = cv2.warpPerspective(
 
 ```json
 {
-  "cols": 9,
-  "rows": 6,
-  "square_mm": 18,
-  "workspace_mm": [400, 280],
-  "canvas_px": [3200, 2240],
-  "board_outer_origin_mm": [110, 77]
+  "cols": 6,
+  "rows": 8,
+  "square_mm": 25,
+  "workspace_mm": [330, 330],
+  "canvas_px": [2640, 2640],
+  "board_outer_origin_mm": [77.5, 52.5]
 }
 ```
 
-`board_outer_origin_mm` 是棋盘格最外层黑白方格外框左上角的毫米坐标。默认值把 `180 x 126 mm` 的棋盘格放在 `400 x 280 mm` 工作区中央。棋盘格长边必须与工作区 `x` 轴平行，不能旋转 90 度。普通棋盘格没有方向 ID，当前代码会按俯拍图像左上方向消除 180 度歧义。
+`board_outer_origin_mm` 是棋盘格最外层黑白方格外框左上角的毫米坐标。默认值把 `175 x 225 mm` 的纵向棋盘格放在 `330 x 330 mm` 工作区中央，并给当前 16 块碎片的散落范围留出约 20 mm 边距。棋盘格必须正向平放，不能旋转 90 度。普通棋盘格没有方向 ID，当前代码会按俯拍图像左上方向消除 180 度歧义。
 
 固定相机后拍三张：
 

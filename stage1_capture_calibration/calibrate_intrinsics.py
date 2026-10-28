@@ -34,9 +34,9 @@ def main() -> None:
         required=True,
         help="Directory containing 15-25 chessboard photos.",
     )
-    parser.add_argument("--cols", type=int, default=9, help="Inner corners per row.")
-    parser.add_argument("--rows", type=int, default=6, help="Inner corners per column.")
-    parser.add_argument("--square-mm", type=float, default=18.0)
+    parser.add_argument("--cols", type=int, default=6, help="Inner corners per row.")
+    parser.add_argument("--rows", type=int, default=8, help="Inner corners per column.")
+    parser.add_argument("--square-mm", type=float, default=25.0)
     parser.add_argument(
         "--output",
         type=Path,

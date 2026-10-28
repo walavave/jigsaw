@@ -2,7 +2,7 @@
 
 保持相机完全不动，按顺序放入：
 
-- `plane.jpg`：一张棋盘格平放在工作区，长边与工作区 `x` 轴平行，位置符合 `config/checkerboard_layout.json`。
+- `plane.jpg`：一张纵向棋盘格正向平放在工作区，位置符合 `config/checkerboard_layout.json`。
 - `empty.jpg`：拿走棋盘格和碎片，只拍空工作区。
 - `pieces.jpg`：16 块碎片正面朝上散落，互不重叠。
 

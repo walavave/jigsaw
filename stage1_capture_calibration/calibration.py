@@ -8,6 +8,7 @@ from typing import Sequence
 
 import cv2
 import numpy as np
+from PIL import Image, ImageOps
 
 
 @dataclass
@@ -18,6 +19,7 @@ class IntrinsicCalibration:
     rms_reprojection_px: float
     per_view_errors_px: list[float]
     accepted_images: list[str]
+    orientation_normalization: dict[str, int]
 
 
 def chessboard_object_points(
@@ -70,6 +72,28 @@ def detect_chessboard(
     return corners
 
 
+def load_calibration_image(path: Path) -> np.ndarray:
+    """Load a grayscale image and apply its EXIF orientation."""
+
+    with Image.open(path) as source:
+        oriented = ImageOps.exif_transpose(source)
+        return np.asarray(oriented.convert("L")).copy()
+
+
+def normalize_to_image_size(
+    image: np.ndarray,
+    expected_size: tuple[int, int],
+) -> tuple[np.ndarray, int | None]:
+    """Normalize a 90-degree camera roll to the reference image axes."""
+
+    actual_size = (image.shape[1], image.shape[0])
+    if actual_size == expected_size:
+        return image, None
+    if actual_size == (expected_size[1], expected_size[0]):
+        return cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE), 90
+    return image, None
+
+
 def calibrate_from_images(
     image_paths: Sequence[Path],
     cols: int,
@@ -91,20 +115,33 @@ def calibrate_from_images(
     object_points: list[np.ndarray] = []
     image_points: list[np.ndarray] = []
     accepted: list[str] = []
+    orientation_normalization: dict[str, int] = {}
     image_size: tuple[int, int] | None = None
 
     for path in image_paths:
-        buffer = np.fromfile(path, dtype=np.uint8)
-        image = cv2.imdecode(buffer, cv2.IMREAD_GRAYSCALE)
-        if image is None:
+        try:
+            image = load_calibration_image(path)
+        except Exception:
             print(f"[skip] cannot read: {path}")
             continue
         current_size = (image.shape[1], image.shape[0])
         if image_size is None:
             image_size = current_size
-        elif current_size != image_size:
-            print(f"[skip] inconsistent size: {path} {current_size} != {image_size}")
-            continue
+        else:
+            image, rotation_deg = normalize_to_image_size(image, image_size)
+            if rotation_deg is not None:
+                orientation_normalization[str(path)] = rotation_deg
+                print(
+                    f"[rotate] {path.name}: {current_size} -> "
+                    f"{image.shape[1]}x{image.shape[0]} ({rotation_deg} deg)"
+                )
+            current_size = (image.shape[1], image.shape[0])
+            if current_size != image_size:
+                print(
+                    f"[skip] inconsistent size: {path} "
+                    f"{current_size} != {image_size}"
+                )
+                continue
 
         corners = detect_chessboard(image, cols, rows)
         if corners is None:
@@ -155,6 +192,7 @@ def calibrate_from_images(
         rms_reprojection_px=float(rms),
         per_view_errors_px=per_view_errors,
         accepted_images=accepted,
+        orientation_normalization=orientation_normalization,
     )
 
 
@@ -178,6 +216,7 @@ def calibration_to_dict(
         "rms_reprojection_px": calibration.rms_reprojection_px,
         "per_view_errors_px": calibration.per_view_errors_px,
         "accepted_images": calibration.accepted_images,
+        "orientation_normalization": calibration.orientation_normalization,
         "image_count": len(calibration.accepted_images),
     }
 

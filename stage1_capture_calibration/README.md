@@ -58,11 +58,11 @@ python3 stage1_capture_calibration/make_print_pdf.py --image pic.jpg
 python3 stage1_capture_calibration/make_calibration_board.py
 ```
 
-输出 `output/calibration_targets/checkerboard_9x6_18mm.pdf`。按 A4、100% 打印并粘在平整硬板上。默认参数是：
+输出 `output/calibration_targets/checkerboard_6x8_25mm.pdf`。按 A4 纵向、100% 打印并粘在平整硬板上。默认参数是：
 
-- 内角点：`9 x 6`
-- 方格边长：`18 mm`
-- 棋盘格外尺寸：`180 x 126 mm`
+- 内角点：`6 x 8`
+- 方格边长：`25 mm`
+- 棋盘格外尺寸：`175 x 225 mm`
 
 如果更换靶纸，必须同步修改 `config/checkerboard_layout.json` 和命令行参数。
 
@@ -98,22 +98,24 @@ python3 stage1_capture_calibration/export_realsense_intrinsics.py \
 ```bash
 python3 stage1_capture_calibration/calibrate_intrinsics.py \
   --images stage1_capture_calibration/input/calibration \
-  --cols 9 \
-  --rows 6 \
-  --square-mm 18
+  --cols 6 \
+  --rows 8 \
+  --square-mm 25
 ```
 
 输出 `output/calibration/intrinsics.json` 和 `undistorted_example.png`。建议 RMS 重投影误差小于 `1.0 px`；超过时应重拍模糊、低倾斜或边缘覆盖不足的视图。
+
+标定器会自动读取 EXIF 方向，并把手机横拍/竖拍造成的 90° 旋转归一化到首张照片的坐标系。被旋转的文件和角度会写入 `intrinsics.json` 的 `orientation_normalization`，不会再因为像素长宽互换而直接跳过。
 
 ## 4. 拍摄平面照片、空桌面和碎片
 
 相机固定后依次拍三张，期间不要移动相机、工作区或灯光：
 
-1. `input/raw/plane.jpg`：棋盘格平放在工作区内，棋盘格长边与工作区 `x` 轴平行。默认配置假设棋盘格外框左上角位于工作区 `(110, 77) mm`，即棋盘格在工作区内居中。
+1. `input/raw/plane.jpg`：棋盘格正向平放在工作区内。当前配置假设棋盘格外框左上角位于工作区 `(77.5, 52.5) mm`，即纵向棋盘格在 `330 x 330 mm` 工作区内居中。
 2. `input/raw/empty.jpg`：拿走棋盘格和碎片，只拍空工作区。
 3. `input/raw/pieces.jpg`：16 块碎片正面朝上散落，互不重叠、不遮挡。
 
-默认工作区为 `400 x 280 mm`，画布为 `3200 x 2240 px`。如果你的桌面区域不同，修改 `config/checkerboard_layout.json` 中的 `workspace_mm`、`canvas_px` 和 `board_outer_origin_mm`，再重新拍摄。
+当前工作区为 `330 x 330 mm`，画布为 `2640 x 2640 px`。如果你的桌面区域不同，修改 `config/checkerboard_layout.json` 中的 `workspace_mm`、`canvas_px` 和 `board_outer_origin_mm`，再重新拍摄。
 
 普通棋盘格没有方向 ID，程序只能根据俯拍画面的左上方向消除 180 度歧义。因此 `plane.jpg` 中的棋盘格必须按上述方向放置，不能旋转 90 度，也不要斜放。
 

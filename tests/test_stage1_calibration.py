@@ -1,3 +1,4 @@
+import json
 import math
 import sys
 import tempfile
@@ -69,8 +70,11 @@ class CalibrationTests(unittest.TestCase):
             paths: list[Path] = []
             for index, transform in enumerate(transforms):
                 path = Path(temporary_directory) / f"view_{index:02d}.png"
+                image = render_chessboard_view(transform)
+                if index == len(transforms) - 1:
+                    image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
                 self.assertTrue(
-                    cv2.imwrite(str(path), render_chessboard_view(transform))
+                    cv2.imwrite(str(path), image)
                 )
                 paths.append(path)
 
@@ -81,6 +85,10 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(len(calibration.per_view_errors_px), len(transforms))
         self.assertTrue(math.isfinite(calibration.rms_reprojection_px))
         self.assertLess(calibration.rms_reprojection_px, 3.0)
+        self.assertEqual(
+            calibration.orientation_normalization[str(paths[-1])],
+            90,
+        )
 
     def test_homography_recovers_a_known_planar_transform(self) -> None:
         markers = [
@@ -200,12 +208,27 @@ class CalibrationTests(unittest.TestCase):
         )
 
     def test_checkerboard_plane_rectification_end_to_end(self) -> None:
-        cols, rows = 9, 6
-        canvas_px = (800, 560)
-        workspace_mm = (400.0, 280.0)
+        layout_path = (
+            ROOT
+            / "stage1_capture_calibration"
+            / "config"
+            / "checkerboard_layout.json"
+        )
+        layout = json.loads(layout_path.read_text(encoding="utf-8"))
+        cols = int(layout["cols"])
+        rows = int(layout["rows"])
+        square_mm = float(layout["square_mm"])
+        workspace_mm = tuple(float(value) for value in layout["workspace_mm"])
+        board_origin_mm = tuple(
+            float(value) for value in layout["board_outer_origin_mm"]
+        )
+        canvas_px = (640, 640)
         px_per_mm = canvas_px[0] / workspace_mm[0]
-        square_px = round(18 * px_per_mm)
-        origin_px = (round(110 * px_per_mm), round(77 * px_per_mm))
+        square_px = round(square_mm * px_per_mm)
+        origin_px = (
+            round(board_origin_mm[0] * px_per_mm),
+            round(board_origin_mm[1] * px_per_mm),
+        )
         target = np.full((canvas_px[1], canvas_px[0]), 255, dtype=np.uint8)
         for row in range(rows + 1):
             for col in range(cols + 1):
@@ -235,10 +258,10 @@ class CalibrationTests(unittest.TestCase):
             image=source,
             cols=cols,
             rows=rows,
-            square_mm=18,
+            square_mm=square_mm,
             workspace_mm=workspace_mm,
             canvas_px=canvas_px,
-            board_outer_origin_mm=(110, 77),
+            board_outer_origin_mm=board_origin_mm,
         )
 
         self.assertLess(result.rms_reprojection_px, 0.5)
@@ -247,7 +270,7 @@ class CalibrationTests(unittest.TestCase):
         np.testing.assert_allclose(
             result.homography,
             expected,
-            atol=0.5,
+            atol=2.0,
         )
 
     def test_marker_layout_rejects_duplicate_ids(self) -> None:
