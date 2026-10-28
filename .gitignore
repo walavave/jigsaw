@@ -32,16 +32,6 @@ tmp/
 .env.*
 !.env.example
 
-# Stage outputs are reproducible; keep their README files
-stage*/output/*
-!stage*/output/README.md
-
-# Large raw calibration and capture images stay local
-stage*/input/calibration/*
-stage*/input/raw/*
-!stage*/input/calibration/README.md
-!stage*/input/raw/README.md
-
 # Optional deep-learning model weights
 checkpoints/
 weights/

@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0",
+  "calibration_type": "chessboard_intrinsics",
+  "image_size_px": [
+    1279,
+    1706
+  ],
+  "pattern": {
+    "cols_inner_corners": 6,
+    "rows_inner_corners": 8,
+    "square_mm": 25.0
+  },
+  "camera_matrix": [
+    [
+      1320.8022053840195,
+      0.0,
+      637.7776010026612
+    ],
+    [
+      0.0,
+      1318.4666306898455,
+      854.1353487341472
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_coefficients": [
+    0.4574662818442257,
+    -2.9975339208444467,
+    -0.0005138293271421608,
+    -0.00045121351090894146,
+    6.0692495753084925
+  ],
+  "rms_reprojection_px": 0.7128486073061648,
+  "per_view_errors_px": [
+    0.5314756097828206,
+    0.552410622856446,
+    0.8945734653057926,
+    0.8470919663268053,
+    0.7616964305864087,
+    0.5453442925735922,
+    0.5809828408451566,
+    0.5814164204007556,
+    0.8958770852219183,
+    0.5889828141342589,
+    0.5395531463715052,
+    0.7097715340132422,
+    0.9548169766048233,
+    1.01054557699801,
+    1.3091812724973722,
+    0.6732627428673019,
+    0.6478971878398752,
+    0.7721094716339012,
+    0.4430194750171345,
+    0.44581433371267076,
+    0.4355024049028111,
+    0.5889646000551422,
+    0.6403053557677845,
+    0.5889457407540843,
+    0.544400073115038
+  ],
+  "accepted_images": [
+    "stage1_capture_calibration/input/calibration/1.jpg",
+    "stage1_capture_calibration/input/calibration/10.jpg",
+    "stage1_capture_calibration/input/calibration/11.jpg",
+    "stage1_capture_calibration/input/calibration/12.jpg",
+    "stage1_capture_calibration/input/calibration/13.jpg",
+    "stage1_capture_calibration/input/calibration/14.jpg",
+    "stage1_capture_calibration/input/calibration/15.jpg",
+    "stage1_capture_calibration/input/calibration/16.jpg",
+    "stage1_capture_calibration/input/calibration/17.jpg",
+    "stage1_capture_calibration/input/calibration/18.jpg",
+    "stage1_capture_calibration/input/calibration/19.jpg",
+    "stage1_capture_calibration/input/calibration/2.jpg",
+    "stage1_capture_calibration/input/calibration/20.jpg",
+    "stage1_capture_calibration/input/calibration/21.jpg",
+    "stage1_capture_calibration/input/calibration/22.jpg",
+    "stage1_capture_calibration/input/calibration/23.jpg",
+    "stage1_capture_calibration/input/calibration/24.jpg",
+    "stage1_capture_calibration/input/calibration/25.jpg",
+    "stage1_capture_calibration/input/calibration/3.jpg",
+    "stage1_capture_calibration/input/calibration/4.jpg",
+    "stage1_capture_calibration/input/calibration/5.jpg",
+    "stage1_capture_calibration/input/calibration/6.jpg",
+    "stage1_capture_calibration/input/calibration/7.jpg",
+    "stage1_capture_calibration/input/calibration/8.jpg",
+    "stage1_capture_calibration/input/calibration/9.jpg"
+  ],
+  "orientation_normalization": {
+    "stage1_capture_calibration/input/calibration/13.jpg": 90,
+    "stage1_capture_calibration/input/calibration/18.jpg": 90
+  },
+  "image_count": 25
+}
