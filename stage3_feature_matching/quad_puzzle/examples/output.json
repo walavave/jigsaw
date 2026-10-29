@@ -1,0 +1,195 @@
+{
+  "schema": "polygon-assembly-result/v2",
+  "status": "approximate",
+  "unit": "rectified_px",
+  "coordinateSystem": "image",
+  "rectangle": {
+    "width": 2027.0166229464926,
+    "height": 1142.9549737845618
+  },
+  "placements": [
+    {
+      "id": "S01",
+      "rotationDeg": 3.028135521675188,
+      "origin": [
+        1466.0965852970112,
+        621.7605609451808
+      ]
+    },
+    {
+      "id": "S02",
+      "rotationDeg": 354.3201296383042,
+      "origin": [
+        1512.0231965624102,
+        316.5854047425204
+      ]
+    },
+    {
+      "id": "S03",
+      "rotationDeg": 359.8257953995452,
+      "origin": [
+        1414.6944578079608,
+        0.24567264875277137
+      ]
+    },
+    {
+      "id": "S04",
+      "rotationDeg": 339.2355938800304,
+      "origin": [
+        463.00068546357187,
+        845.5425391405759
+      ]
+    },
+    {
+      "id": "S05",
+      "rotationDeg": 159.3049384338369,
+      "origin": [
+        480.31857029533137,
+        854.8741094454366
+      ]
+    },
+    {
+      "id": "S06",
+      "rotationDeg": 2.626283093067269,
+      "origin": [
+        278.8290536783667,
+        551.1806892571014
+      ]
+    },
+    {
+      "id": "S07",
+      "rotationDeg": 174.88972738504955,
+      "origin": [
+        1517.3493993665638,
+        314.178428661633
+      ]
+    },
+    {
+      "id": "S08",
+      "rotationDeg": 180.00002105096252,
+      "origin": [
+        1502.412659047351,
+        1142.9549976881917
+      ]
+    },
+    {
+      "id": "S09",
+      "rotationDeg": 359.6127589938467,
+      "origin": [
+        1483.8953819324445,
+        890.12212454726
+      ]
+    },
+    {
+      "id": "S10",
+      "rotationDeg": 183.02821985209874,
+      "origin": [
+        1609.2696104782074,
+        629.3345801291592
+      ]
+    },
+    {
+      "id": "S11",
+      "rotationDeg": 359.99999893403066,
+      "origin": [
+        409.7234239063044,
+        1.5230874222395753e-05
+      ]
+    },
+    {
+      "id": "S12",
+      "rotationDeg": 180.57205950556272,
+      "origin": [
+        1480.706843334254,
+        885.077187653151
+      ]
+    },
+    {
+      "id": "S13",
+      "rotationDeg": 182.6262875346504,
+      "origin": [
+        593.4673294507421,
+        565.6129669528154
+      ]
+    },
+    {
+      "id": "S14",
+      "rotationDeg": 179.9999999483649,
+      "origin": [
+        655.8198711164387,
+        1142.9549725573343
+      ]
+    },
+    {
+      "id": "S15",
+      "rotationDeg": 354.1649574592291,
+      "origin": [
+        498.7042905525756,
+        281.7904627118066
+      ]
+    },
+    {
+      "id": "S16",
+      "rotationDeg": 173.90584038451746,
+      "origin": [
+        494.7501495984143,
+        275.6658957554388
+      ]
+    }
+  ],
+  "reason": "best_found_within_budget",
+  "verification": {
+    "valid": false,
+    "errors": [
+      "input_area_error exceeds tolerance",
+      "pairwise_overlap_sum exceeds tolerance",
+      "missing_area exceeds tolerance",
+      "outside_area exceeds tolerance",
+      "symmetric_difference_area exceeds tolerance",
+      "outside_vertex_distance exceeds tolerance"
+    ],
+    "tolerance": 1e-07,
+    "metrics": {
+      "relativeAreaError": 0.001329015349242106,
+      "relativeOverlapArea": 0.0023488406898802354,
+      "relativeMissingArea": 0.005534271819608911,
+      "relativeOutsideArea": 0.0018564157816370872,
+      "relativeSymmetricDifference": 0.0073906876012459965,
+      "relativeOutsideVertexDistance": 0.0038202649784018217
+    }
+  },
+  "stats": {
+    "mode": "best_effort",
+    "seed": 0,
+    "timeLimitSeconds": 180.0,
+    "elapsedSeconds": 180.02703629000098,
+    "bestPlacedCount": 16,
+    "completeCandidateCount": 25,
+    "objectiveEvaluations": 258066,
+    "improvements": 3816,
+    "optimalityProven": false,
+    "inputGeometryChanged": false,
+    "usedImageContent": false,
+    "usedOriginalPositions": false
+  },
+  "quality": {
+    "objective": "(missingArea+overlapExcessArea+outsideArea)/totalPieceArea",
+    "score": 0.009752489498131624,
+    "pieceCount": 16,
+    "totalPieceArea": 2313709.6833546474,
+    "rectangleArea": 2316788.7311406797,
+    "coveredArea": 2303966.9925533426,
+    "unionArea": 2308267.9157165075,
+    "missingArea": 12821.738587336791,
+    "overlapExcessArea": 5441.767638139711,
+    "outsideArea": 4300.92316316514,
+    "pairwiseOverlapArea": 5441.767642002052,
+    "coverageFraction": 0.9944657281801332,
+    "relativeMissingArea": 0.005541636740157717,
+    "relativeOverlapExcessArea": 0.0023519664879690927,
+    "relativeOutsideArea": 0.0018588862700048142,
+    "relativePairwiseOverlapArea": 0.0023519664896384206,
+    "maxOutsideDistance": 7.74374061528085,
+    "normalization": "total_input_piece_area"
+  }
+}
