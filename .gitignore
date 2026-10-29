@@ -32,6 +32,9 @@ tmp/
 .env.*
 !.env.example
 
+# Generated background scenes (~130 MB; regenerate with backgrounds/make_backgrounds.py)
+backgrounds/output/
+
 # Optional deep-learning model weights
 checkpoints/
 weights/

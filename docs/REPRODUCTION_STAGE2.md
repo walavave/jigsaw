@@ -133,7 +133,7 @@ python docs/verify_stage2.py     # 写 tmp/verify_stage2_result.json 与 overlay
   的“mask IoU > 0.98（对人工标注）”这一条**没有被独立认证**；保存的 `mask.png` 本身按定义就是
   所报多边形的像素栅格（重建 IoU ≈ 1.0），拿它再比一次是循环论证。
 - 确定性：同一输入连续两次运行，`output/` 下 50 个文件 SHA256 全部相同。
-- 单元测试：`python -m unittest discover -s tests -v` → **34 项全绿**
+- 单元测试：`python -m unittest discover -s tests -v` → **64 项全绿**（本部分 22 + `tests/test_backgrounds.py` 30 + 阶段一 12）
   （`tests/test_stage2_extraction.py` 22 项：纯函数、合成 16 片端到端（含确定性）、真实数据集成；
   另有第一阶段 12 项）。合成用例里 16 片的角点误差 ≤ 1.03 px。
 - 人工检查：`docs/stage2_preview.png`（16 片归一化缩略图）与每片 `S*_debug.png`
@@ -196,7 +196,7 @@ python docs/verify_stage2.py     # 写 tmp/verify_stage2_result.json 与 overlay
 
 | 路径 | 说明 |
 | --- | --- |
-| `stage2_piece_extraction/extract_pieces.py` | 主体实现（约 1300 行，算法版本 `stage2-extract-1.2.1`） |
+| `stage2_piece_extraction/extract_pieces.py` | 主体实现（约 1300 行，算法版本 `stage2-extract-1.3.0`） |
 | `stage2_piece_extraction/config/extraction.example.json` | 完整参数（含 `edge_localizer`、`max_side_shift_px`、`fail_on_manual_review`） |
 | `stage2_piece_extraction/README.md` | 中文实现文档：参数表、算法、契约（含路径解析约定）、实测结果、限制 |
 | `stage2_piece_extraction/input/README.md`（修改） | 说明默认直接读阶段一结果、此目录只用于打包/回归夹具 |
@@ -205,6 +205,14 @@ python docs/verify_stage2.py     # 写 tmp/verify_stage2_result.json 与 overlay
 | `tests/test_stage2_extraction.py` | 22 项测试（合成端到端 + 真实数据集成） |
 | `docs/verify_stage2.py` | 独立验证脚本（59 项检查，只写 `tmp/`） |
 | `docs/stage2_preview.png` | 16 片归一化缩略图 |
+
+## 8. 后续扩展：换底面鲁棒性
+
+阶段一只在黑绒布 bench 上采集，为了检验“换一张桌子还行不行”，另加了 `backgrounds/`：
+程序化生成木地板 / 大理石 / 水泥三种底面，把**同一批真实纸片**按 `pieces.json` 的几何重新合成上去，
+于是每个合成场景都自带真值。结论：铺黑色垫布时精度与 bench 同级（角点中位 0.39-0.40 px、IoU≈0.993），
+裸木地板次之（中位 2.28 px），裸大理石/水泥因投影并入掩膜而失败（物理限制，已量化）。
+方法与数据见 [`docs/BACKGROUNDS.md`](BACKGROUNDS.md)；`backgrounds/output/` 约 130 MB，已 gitignore。
 
 生成的产物与第一阶段一致地**保留在工作区但未提交**；若要回到原始状态执行
 `git checkout -- stage2_piece_extraction/output`（产物本身是 untracked，直接删除即可）。

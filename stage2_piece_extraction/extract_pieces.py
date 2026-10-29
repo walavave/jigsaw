@@ -63,7 +63,7 @@ if str(ROOT / "shared") not in sys.path:
 
 from jigsaw_common.io import imread, imwrite, read_json, write_json  # noqa: E402
 
-ALGORITHM_VERSION = "stage2-extract-1.2.1"
+ALGORITHM_VERSION = "stage2-extract-1.3.0"
 
 # Manual-review triggers that are independent of the quality score itself.
 MIN_SAFE_SIDE_PX = 100.0
@@ -92,6 +92,12 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "threshold_max": 60.0,
     "open_ksize": 7,
     "close_ksize": 7,
+    "mask_erode_px": 0.0,
+    "shadow_rejection": False,
+    "shadow_blur_px": 5.0,
+    "shadow_window_px": 21,
+    "shadow_correlation": 0.55,
+    "shadow_min_texture": 1.5,
     "approx_epsilon_ratio": 0.02,
     "min_vertices": 3,
     "max_vertices": 6,
@@ -101,6 +107,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "edge_fit_residual_px": 2.0,
     "min_edge_contrast": 20.0,
     "edge_localizer": "gradient_max",
+    "half_level_response": "edge",
     "min_edge_gradient": 2.0,
     "max_side_shift_px": 3.0,
     "max_corner_shift_px": 8.0,
@@ -335,12 +342,60 @@ def edge_response(pieces: np.ndarray, empty: np.ndarray, colour: np.ndarray, con
     return colour + 0.5 * np.minimum(gradient, 200.0)
 
 
+def _local_correlation(first: np.ndarray, second: np.ndarray, window: int) -> np.ndarray:
+    """Normalised local cross-correlation of two single-channel images."""
+
+    size = (window, window)
+    mean_first = cv2.boxFilter(first, -1, size, normalize=True)
+    mean_second = cv2.boxFilter(second, -1, size, normalize=True)
+    var_first = cv2.boxFilter(first * first, -1, size, normalize=True) - mean_first * mean_first
+    var_second = cv2.boxFilter(second * second, -1, size, normalize=True) - mean_second * mean_second
+    covariance = cv2.boxFilter(first * second, -1, size, normalize=True) - mean_first * mean_second
+    scale = np.sqrt(np.maximum(var_first, 1e-6) * np.maximum(var_second, 1e-6))
+    return covariance / scale
+
+
+def shadow_suspicion(pieces: np.ndarray, empty: np.ndarray, config: dict) -> np.ndarray:
+    """How much each pixel looks like an illumination change of the empty frame.
+
+    A cast shadow multiplies the floor colour, so the high-pass texture of the piece
+    frame stays locally correlated with the texture of the empty frame; a paper piece
+    replaces the floor, so its texture is uncorrelated with it.  Pixels where the empty
+    frame carries no texture (e.g. the black bench) are never judged suspicious, which
+    keeps the original bench behaviour intact.
+    """
+
+    radius = int(round(float(config["shadow_blur_px"])))
+    ksize = 2 * radius + 1
+    window = int(config["shadow_window_px"])
+    if window % 2 == 0:
+        window += 1
+
+    gray_pieces = cv2.cvtColor(pieces, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gray_empty = cv2.cvtColor(empty, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    high_pieces = gray_pieces - cv2.GaussianBlur(gray_pieces, (ksize, ksize), 0)
+    high_empty = gray_empty - cv2.GaussianBlur(gray_empty, (ksize, ksize), 0)
+
+    correlation = _local_correlation(high_pieces, high_empty, window)
+
+    texture = cv2.boxFilter(high_empty * high_empty, -1, (window, window), normalize=True) ** 0.5
+    correlation[texture < float(config["shadow_min_texture"])] = 0.0
+    return np.clip(correlation, 0.0, 1.0)
+
+
 def foreground_mask(
     response: np.ndarray,
     config: dict,
     ignore_border_px: int,
+    shadow_suspicion: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float]:
-    """Binary piece mask plus the threshold that produced it."""
+    """Binary piece mask plus the threshold that produced it.
+
+    ``shadow_suspicion`` (0..1, higher = more likely an illumination-only change) is
+    only used when ``config["shadow_rejection"]`` is on; it exists so that dark and
+    textured floors, where a cast shadow also clears the colour threshold, do not
+    merge into the piece mask.
+    """
 
     clipped = np.clip(response, 0.0, 255.0).astype(np.uint8)
     if config["threshold_mode"] == "otsu":
@@ -351,12 +406,25 @@ def foreground_mask(
     threshold = float(np.clip(threshold, config["threshold_min"], config["threshold_max"]))
 
     mask = (clipped >= threshold).astype(np.uint8) * 255
+
+    if shadow_suspicion is not None and bool(config.get("shadow_rejection", False)):
+        rejection = shadow_suspicion >= float(config["shadow_correlation"])
+        mask[rejection] = 0
+
     open_ksize = int(config["open_ksize"])
     close_ksize = int(config["close_ksize"])
     if open_ksize > 1:
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((open_ksize, open_ksize), np.uint8))
     if close_ksize > 1:
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((close_ksize, close_ksize), np.uint8))
+
+    # 浅色底面会带出碎片投影：阴影与纸片一起超过阈值时掩膜会外扩。把掩膜整体收缩若干像素，
+    # 只用来给“粗多边形 / 逐边亚像素定位”提供初值，最终多边形仍由边缘拟合决定。
+    mask_erode_px = float(config.get("mask_erode_px", 0.0))
+    if mask_erode_px > 0.0:
+        ksize = int(round(mask_erode_px)) * 2 + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
+        mask = cv2.erode(mask, kernel)
 
     if ignore_border_px > 0:
         mask[:ignore_border_px, :] = 0
@@ -1044,7 +1112,8 @@ def extract_pieces(
     colour = colour_response(pieces_image, empty_image, config)
     response = edge_response(pieces_image, empty_image, colour, config)
     ignore_border_px = _ring_mm_to_px(float(config["ignore_border_mm"]), rectification)
-    mask, threshold = foreground_mask(colour, config, ignore_border_px)
+    suspicion = shadow_suspicion(pieces_image, empty_image, config) if bool(config.get("shadow_rejection", False)) else None
+    mask, threshold = foreground_mask(colour, config, ignore_border_px, shadow_suspicion=suspicion)
 
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
     candidates: list[dict[str, Any]] = []
@@ -1073,8 +1142,9 @@ def extract_pieces(
     candidates = [candidates[index] for index in scan_order_indices([item["centroid"] for item in candidates])]
 
     fitted: list[dict[str, Any]] = []
+    half_response = colour if str(config.get("half_level_response", "edge")) == "colour" else response
     for index, candidate in enumerate(candidates, start=1):
-        fit = refine_polygon(response, candidate["contour"], config, gradient_response=colour)
+        fit = refine_polygon(half_response, candidate["contour"], config, gradient_response=colour)
         if len(fit.corners) < 3:
             continue
         quality_score = combine_quality(fit.quality)

@@ -21,7 +21,11 @@
 - `output/pieces/S01_mask.png`（0/255 二值掩码，与 rgba 的 alpha 一致）
 - `output/pieces/S01_debug.png`（棋盘格底 + 归一化轮廓 + 角点编号，便于人工复核）
 
-当前状态：已实现（`extract_pieces.py`，算法版本 `stage2-extract-1.2.1`）。
+当前状态：已实现（`extract_pieces.py`，算法版本 `stage2-extract-1.3.0`）。
+
+默认夹具是黑绒布 bench（阶段一实拍）。如果想看同一套算法在别的底面上的表现，仓库里有 `backgrounds/`
+的程序化底面（木地板 / 大理石 / 水泥 + 黑色垫布变体，自带真值几何）和评估脚本，见
+[`docs/BACKGROUNDS.md`](../docs/BACKGROUNDS.md)。
 
 ## 运行
 
@@ -44,7 +48,7 @@ python stage2_piece_extraction/extract_pieces.py \
 复核（两条命令，都不需要 GPU、不需要相机）：
 
 ```bash
-python -m unittest discover -s tests -v   # 34 项，应全绿
+python -m unittest discover -s tests -v   # 64 项，应全绿
 python docs/verify_stage2.py              # 59 项，预期 2 FAIL / 7 WARN、退出码 1（判读口径见报告 §5.4）
 ```
 
@@ -58,6 +62,9 @@ python docs/verify_stage2.py              # 59 项，预期 2 FAIL / 7 WARN、�
 | `min_quality` | 质量阈值，低于该值的碎片写入 `manual_review` |
 | `threshold_mode` / `threshold_min` / `threshold_max` | 前景阈值策略：`otsu` 时把 Otsu 结果夹到 `[min, max]`。纸面印刷内容很暗，Otsu 会偏高，实测需夹到 25 才不会啃掉碎片边缘 |
 | `open_ksize` / `close_ksize` | 形态学开闭核尺寸 |
+| `mask_erode_px` | 掩膜额外腐蚀半径（默认 0，bench 数据不变）。浅色地面上的投影会让掩膜外扩，腐蚀只用于给粗多边形/逐边定位一个更干净的初值，最终多边形仍由边缘拟合决定 |
+| `shadow_rejection` / `shadow_blur_px` / `shadow_window_px` / `shadow_min_texture` / `shadow_correlation` | 纹理性底面的投影抑制：把两帧各自高通后的局部相关度当作“该像素是否只是同一纹理变暗”的证据，相关度 ≥ `shadow_correlation` 的像素从掩膜里剔除；`shadow_min_texture` 以下的“无纹理”像素不产生证据（避免传感器噪声被误判）。默认关闭，bench 场景不需要 |
+| `half_level_response` | `half_level` 参考线跑在哪个响应上：`edge`（默认，1.0.0 行为）或 `colour`（纹理底面上更稳，见 `backgrounds/` 的 profile） |
 | `piece_output_size_px` / `piece_margin_px` | 归一化画布尺寸与留白（本项目 512 / 20 px） |
 | `approx_epsilon_ratio` | 粗多边形 `approxPolyDP` 的 epsilon（按周长比例） |
 | `edge_sample_count` / `edge_profile_px` / `edge_profile_step_px` | 每条边沿法向采样的点数、半宽、步长（亚像素角点用） |
@@ -70,7 +77,7 @@ python docs/verify_stage2.py              # 59 项，预期 2 FAIL / 7 WARN、�
 ## 算法
 
 1. **背景差分**：`colour_response` 取两张图（同一相机、同一光照、同一桌面）的 Lab 欧氏距离；`edge_response` 在此基础上再加 0.5×（Laplacian 差分）。掩码用 `colour_response`（Laplacian 项会把 Otsu 阈值抬高）；`edge_response` 只给 `half_level` 定位用——`gradient_max` 改在 `colour_response` 上跑，因为 Laplacian 项会把梯度峰值往碎片内侧拉约 0.7 px（边缘偏移的证据见 `docs/REPRODUCTION_STAGE2.md` §5.1）。
-2. **二值掩码**：Otsu（夹到 `[threshold_min, threshold_max]`）→ 开/闭运算 → 连通域 → 按面积/边界/凸性过滤，得到 16 个候选。
+2. **二值掩码**：Otsu（夹到 `[threshold_min, threshold_max]`）→ `shadow_rejection` 时剔除“同纹理变暗”的投影像素 → 开/闭运算 → `mask_erode_px` 腐蚀 → 连通域 → 按面积/边界/凸性过滤，得到 16 个候选。
 3. **亚像素角点**：
    - `approxPolyDP` 在凸包上生成长度 ≤ `max_vertices` 的粗多边形（3..6 边）；
    - 对每条边沿外法向在半宽 `edge_profile_px` 内双线性采样响应剖面；`edge_localizer="gradient_max"` 时在 `colour_response` 剖面取梯度的绝对值最大点（用相邻三点抛物线细化到亚像素），即纸张的真实边界；`"half_level"` 时取内/外两侧中位数之半高交点（印刷内容会让剖面非单调，所以不是"唯一交点"而是"最近交点"）；
