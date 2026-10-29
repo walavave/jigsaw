@@ -4,7 +4,6 @@
   "ignore_border_mm": 5.0,
   "min_piece_area_px": 2000,
   "min_quality": 0.78,
-  "piece_output_size_px": 512,
   "piece_margin_px": 20.0,
   "blur_ksize": 5,
   "threshold_mode": "otsu",

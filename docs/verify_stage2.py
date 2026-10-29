@@ -41,6 +41,18 @@ global check is therefore independent of the Stage 2 output (the fallback --
 derive the scale from the observed total -- is only used if both the PDF and
 docs are unavailable, and it is then reported as circular/WARN).
 
+PIECE FRAME (v1.4.0 base-edge contract)
+---------------------------------------
+Pieces are no longer normalised into a shared 512x512 canvas.  Every piece is
+cropped in its OWN base-edge frame at 1:1 scale: the longest side becomes the
+base, mapped to P0=(0,0) and P1=(baseLength,0), while the remaining corners lie
+below (y > 0) and the quad is clockwise in the y-down image frame; the crop is
+that frame translated by (margin, margin) and rounded up to whole pixels, with
+`piece_scale = 1`.  This script re-derives the frame from `corners_px` alone
+(see derive_base_edge_frame) and cross-checks it against the rounded preview
+fields and against the minimal Stage 3 hand-off file pieces_base_edge.json --
+it never imports Stage 2 code, so the derivation is independent.
+
 Determinism of the extractor is the Lead's job: this script never runs it.
 """
 from __future__ import annotations
@@ -67,6 +79,8 @@ LAYOUT_JSON = S1_OUT / "cut_pdf" / "jigsaw_layout.json"
 PDF_PATH = S1_OUT / "cut_pdf" / "jigsaw_16_pieces.pdf"
 RECT_JSON = S1_OUT / "rectified" / "rectification.json"
 PIECES_JSON = S2_OUT / "pieces.json"
+BASE_JSON = S2_OUT / "pieces_base_edge.json"     # minimal Stage 3 hand-off (v1.4.0)
+BASELINE_JSON = TMP / "verify_stage2_result_v130.json"   # previous verified run
 RESULT_JSON = TMP / "verify_stage2_result.json"
 OVERLAY_PNG = TMP / "verify_stage2_overlay.png"
 REPRO_DOC = ROOT / "docs" / "REPRODUCTION.md"
@@ -154,7 +168,7 @@ def convexity(pts: np.ndarray) -> dict:
     for i in range(n):
         a = pts[i - 1] - pts[i]
         b = pts[(i + 1) % n] - pts[i]
-        crosses.append(float(np.cross(a, b)))
+        crosses.append(float(a[0] * b[1] - a[1] * b[0]))
         c = float(np.dot(a, b) / max(np.linalg.norm(a) * np.linalg.norm(b), 1e-12))
         angles.append(math.degrees(math.acos(max(-1.0, min(1.0, c)))))
     crosses = np.asarray(crosses)
@@ -284,25 +298,6 @@ def mask_iou(poly: np.ndarray, mask: np.ndarray) -> float:
     inter = int(np.count_nonzero((m > 0) & (mask > 0)))
     union = int(np.count_nonzero((m > 0) | (mask > 0)))
     return inter / union if union else 0.0
-
-
-def mask_largest_contour_polygon(mask: np.ndarray):
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cnts:
-        return None
-    cnt = max(cnts, key=cv2.contourArea)
-    per = cv2.arcLength(cnt, True)
-    for frac in (0.005, 0.01, 0.02, 0.03, 0.05):
-        ap = cv2.approxPolyDP(cnt, frac * per, True).reshape(-1, 2).astype(np.float64)
-        if len(ap) == 4:
-            return ap
-    hull = cv2.convexHull(cnt).reshape(-1, 2).astype(np.float64)
-    for frac in (0.005, 0.01, 0.02, 0.03, 0.05):
-        ap = cv2.approxPolyDP(hull.reshape(-1, 1, 2), frac * cv2.arcLength(hull.reshape(-1, 1, 2), True), True)
-        ap = ap.reshape(-1, 2).astype(np.float64)
-        if len(ap) == 4:
-            return ap
-    return None
 
 
 # --------------------------------------------- independent photo measurement
@@ -617,15 +612,59 @@ def main() -> int:
     top = load_json(PIECES_JSON)
     details["pieces_json"] = {"path": str(PIECES_JSON), "top_level_keys": sorted(top.keys())}
 
+    # Previous verified run (v1.3.0 baseline): used only as a determinism proxy --
+    # the v1.4.0 change is the hand-off frame, the detected corners must not move.
+    baseline_rows: dict = {}
+    for cand in (BASELINE_JSON, RESULT_JSON):
+        if not cand.exists():
+            continue
+        try:
+            prev = load_json(cand)
+            rows = {r.get("piece_id"): r for r in prev.get("details", {}).get("pieces", [])}
+        except Exception:  # noqa: BLE001
+            rows = {}
+        if rows:
+            baseline_rows = rows
+            details["baseline"] = {"path": str(cand), "n_pieces": len(rows),
+                                   "verdict": prev.get("verdict")}
+            break
+
     record("JSON schema_version", "PASS" if "schema_version" in top else "FAIL",
            f"schema_version={top.get('schema_version')!r}")
     record("JSON coordinate_system",
            "PASS" if top.get("coordinate_system") == "rectified_px" else "FAIL",
            f"coordinate_system={top.get('coordinate_system')!r} (expected 'rectified_px')")
-    psize = top.get("piece_size_px")
-    psize_ok = (isinstance(psize, (list, tuple)) and len(psize) == 2
-                and all(int(v) > 0 for v in psize))
-    record("JSON piece_size_px", "PASS" if psize_ok else "FAIL", f"piece_size_px={psize!r}")
+
+    # v1.4.0 hand-off: per-piece base-edge frame at 1:1 scale, NOT a shared
+    # normalised canvas, so the old top-level piece_size_px must be gone.
+    algo = str(top.get("algorithm_version", ""))
+    record("JSON algorithm_version is the base-edge contract",
+           "PASS" if algo == "stage2-extract-1.4.0" else "WARN",
+           f"algorithm_version={algo!r} (expected 'stage2-extract-1.4.0')")
+    pframe = top.get("piece_frame")
+    frame_declared = (isinstance(pframe, str) and "base" in pframe.lower()
+                      and "longest" in pframe.lower() and "scale" in pframe.lower())
+    record("JSON piece_frame declares the base-edge frame",
+           "PASS" if frame_declared else "FAIL",
+           f"piece_frame declares the longest-side base, y-down clockwise order and "
+           f"unit scale: {pframe!r}" if frame_declared else
+           f"piece_frame={pframe!r} (expected a base-edge description: longest side = base, "
+           f"clockwise in y-down, 1:1 scale)")
+    pscale = top.get("piece_scale")
+    record("JSON piece_scale == 1.0 (no per-piece rescaling)",
+           "PASS" if isinstance(pscale, (int, float)) and abs(float(pscale) - 1.0) <= 1e-9 else "FAIL",
+           f"piece_scale={pscale!r}")
+    margin_top = top.get("piece_margin_px")
+    record("JSON piece_margin_px is a positive number",
+           "PASS" if isinstance(margin_top, (int, float)) and float(margin_top) > 0 else "FAIL",
+           f"piece_margin_px={margin_top!r}")
+    deprecated_top = [k for k in ("piece_size_px", "piece_output_size_px") if k in top]
+    record("deprecated shared-canvas keys removed from the top level",
+           "PASS" if not deprecated_top else "WARN",
+           "no top-level piece_size_px / piece_output_size_px (each piece carries its own crop size)"
+           if not deprecated_top else
+           f"still present: {deprecated_top} (the v1.4.0 contract says the shared canvas is gone)")
+    margin_px = float(margin_top) if isinstance(margin_top, (int, float)) else 20.0
 
     # Optional/valuable top-level fields per README 2.3 / task-3.
     for key, label in [("session_id", "JSON session_id"), ("canvas_px", "JSON canvas_px"),
@@ -827,6 +866,64 @@ def main() -> int:
            f"{rule_name}: holds for all {len([a for a in arrs if a is not None])} pieces"
            if not rule_violations else f"violations: {rule_violations[:8]}")
 
+    # ------------------------------------------- independent base-edge frames
+    # v1.4.0 hand-off: no shared normalised canvas any more.  Each piece is
+    # cropped in its own base-edge frame at 1:1 scale (longest side -> P0/P1 on
+    # the x axis, remaining corners below, clockwise in the y-down image frame).
+    # Derive that frame here from corners_px ALONE -- nothing below relies on the
+    # extractor's own frame bookkeeping, so the checks are independent.
+    frames: list[dict | None] = []
+    frame_fail = []
+    for i, arr in enumerate(arrs):
+        pid = ids[i] if i < len(ids) else f"#{i}"
+        if arr is None:
+            frames.append(None)
+            continue
+        try:
+            frames.append(derive_base_edge_frame(arr, margin_px))
+        except Exception as exc:  # noqa: BLE001
+            frame_fail.append(f"{pid}: {exc}")
+            frames.append(None)
+    frames_ok = [f is not None for f in frames]
+    n_frames = int(sum(frames_ok))
+    record("base-edge frame derivable from corners_px alone",
+           "PASS" if n_frames == len(pieces) and not frame_fail else "FAIL",
+           f"{n_frames}/{len(pieces)} pieces: longest side -> P0=(0,0), P1=(baseLength,0), "
+           f"corners below (y>0), crop = frame + margin, 1:1 scale"
+           if n_frames == len(pieces) and not frame_fail else f"failed: {frame_fail[:8]}")
+
+    # Determinism proxy for the Lead: v1.2.1/v1.3.0/v1.4.0 must keep the same
+    # piece geometry (the hand-off frame changed, the detected corners did not).
+    if baseline_rows:
+        base_ids = set(baseline_rows)
+        center_d, area_rel, missing_base = [], [], []
+        for i, row in enumerate(geom_rows):
+            pid = row["piece_id"]
+            prev = baseline_rows.get(pid)
+            if prev is None:
+                missing_base.append(pid)
+                continue
+            if prev.get("center_px") is not None and row.get("center_px") is not None:
+                center_d.append(float(np.abs(np.asarray(prev["center_px"], float)
+                                             - np.asarray(row["center_px"], float)).max()))
+            if prev.get("area_px") and row.get("area_px"):
+                area_rel.append(abs(float(row["area_px"]) / float(prev["area_px"]) - 1.0))
+        if not missing_base and center_d and area_rel:
+            worst_center = max(center_d)
+            worst_area = max(area_rel)
+            status = "PASS" if worst_center <= 1e-3 and worst_area <= 1e-6 else (
+                "WARN" if worst_center <= 0.01 and worst_area <= 1e-4 else "FAIL")
+            record("detected geometry unchanged vs previous verified run", status,
+                   f"center_px max delta {worst_center:.2e} px, |area ratio - 1| max {worst_area:.2e} "
+                   f"vs {Path(details.get('baseline', {}).get('path', 'previous result')).name} "
+                   f"(the v1.4.0 change is the hand-off frame only, not the geometry)")
+        else:
+            record("detected geometry unchanged vs previous verified run", "WARN",
+                   f"baseline incomplete (missing ids {missing_base[:8]})")
+    else:
+        record("detected geometry unchanged vs previous verified run", "WARN",
+               "no previous verify_stage2_result_v130.json / result archive - determinism proxy not evaluable")
+
     # quality vs config threshold / manual_review marking
     min_quality = None
     cfg_paths = [S2_CFG / "extraction.json"] + sorted(S2_CFG.glob("*.json"))
@@ -858,10 +955,6 @@ def main() -> int:
             record("quality scores present", "PASS", f"min={worst_q:.4f}, mean={float(np.nanmean(qualities)):.4f}")
 
     # --------------------------------------------------------- image/mask checks
-    psize_hw = None
-    if psize_ok:
-        psize_w, psize_h = int(psize[0]), int(psize[1])
-        psize_hw = (psize_h, psize_w)
     mask_bad = {k: [] for k in ("size", "binary", "empty", "alpha", "components",
                                 "local_area", "local_iou", "local_bounds", "bleed")}
     local_polys: list[np.ndarray | None] = []
@@ -871,7 +964,6 @@ def main() -> int:
     bleed_stats = []
     for i, piece in enumerate(pieces):
         pid = ids[i] if i < len(ids) else f"#{i}"
-        piece_corners = arrs[i]
         rgba_p = resolve(piece.get("rgba_path"))
         mask_p = resolve(piece.get("mask_path"))
         rgba = imread_u(rgba_p) if rgba_p is not None else None
@@ -889,8 +981,16 @@ def main() -> int:
             mask = mask[:, :, 0]
         if rgba.shape[:2] != mask.shape[:2]:
             mask_bad["size"].append(f"{pid}:{rgba.shape[:2]} vs {mask.shape[:2]}")
-        if psize_hw is not None and rgba.shape[:2] != psize_hw:
-            mask_bad["size"].append(f"{pid}:{rgba.shape[:2]} vs piece_size_px {psize_hw}")
+        # v1.4.0: the crop is the piece's own base-edge frame, so its size must be
+        # the derived ceil(bbox + 2*margin) and must match the recorded crop size.
+        if frames_ok[i]:
+            exp_hw = (frames[i]["size"][1], frames[i]["size"][0])
+            if rgba.shape[:2] != exp_hw:
+                mask_bad["size"].append(f"{pid}:{rgba.shape[:2]} vs derived base-edge crop {exp_hw}")
+        rep_size = piece.get("piece_size_px")
+        if isinstance(rep_size, (list, tuple)) and len(rep_size) == 2:
+            if (int(rep_size[1]), int(rep_size[0])) != rgba.shape[:2]:
+                mask_bad["size"].append(f"{pid}:{rgba.shape[:2]} vs piece_size_px {list(rep_size)}")
         vals = np.unique(mask)
         if not np.all(np.isin(vals, (0, 255))):
             if np.all(np.isin(vals, (0, 1))):
@@ -913,8 +1013,10 @@ def main() -> int:
         frac_bad = float(np.count_nonzero(adiff > 1)) / float(adiff.size)
         if adiff.max() > 1 and frac_bad > 0.001:
             mask_bad["alpha"].append(f"{pid}: max|a-m|={int(adiff.max())}, {frac_bad*100:.2f}% pixels")
-        # local polygon in the per-piece canvas
-        lab, info = local_polygon_for_piece(piece, piece_corners, rgba.shape[:2], mask)
+        # local polygon in the piece's own base-edge crop frame (independently
+        # derived above from corners_px + margin, never taken from the JSON)
+        lab = frames[i]["image"] if frames_ok[i] else None
+        info = "derived:base_edge" if lab is not None else "unrecoverable"
         local_polys.append(lab)
         local_info.append(info)
         if lab is not None:
@@ -1018,112 +1120,265 @@ def main() -> int:
                    f"min {min(qb):.5f} median {float(np.median(qb)):.5f} "
                    f"(needs an independent annotation to certify)")
 
-    # ------------------------------------------------ normalized piece frame
-    # README 4.2 step 4: every piece is stored on a 512x512 local canvas together
-    # with its polygon in LOCAL coordinates.  Verify that rectified_to_piece_matrix
-    # is a reflection-free similarity, that it reproduces normalized_corners_px,
-    # that rotation_deg describes it, and that the canonical frame is the same for
-    # all pieces (margin box, winding, start-corner rule, long-axis orientation).
-    frame_bad = {"similarity": [], "poly": [], "rot": [], "bbox": [],
-                 "winding": [], "start": []}
-    long_axis_deg = []
-    frame_det = {"n": 0}
-    lw = int(psize[0]) if psize_ok else 512
-    lh = int(psize[1]) if psize_ok else 512
-    margin_px = float(top.get("piece_margin_px", 20.0))
+    # ------------------------------------------------------ base-edge frame contract
+    # v1.4.0 hand-off: the extractor records, per piece, the base-edge frame it
+    # cropped at 1:1 scale.  Everything below is checked against the frame this
+    # script derived from corners_px alone (frames[] above) and against the
+    # minimal Stage 3 hand-off file pieces_base_edge.json.
+    fb = {"derive": [], "quad": [], "matrix": [], "rot": [], "preview": [],
+          "crop": [], "margin": [], "deprecated": []}
+    frame_rows = []
     for i, piece in enumerate(pieces):
         pid = ids[i] if i < len(ids) else f"#{i}"
-        lab = local_polys[i] if i < len(local_polys) else None
         P = arrs[i]
-        if lab is None or P is None:
+        f = frames[i]
+        if P is None or f is None:
             continue
-        frame_det["n"] += 1
-        M = piece.get("rectified_to_piece_matrix")
-        if M is None:
-            frame_bad["similarity"].append(f"{pid}: matrix missing")
-            continue
-        M = np.asarray(M, np.float64)
-        if M.shape != (3, 3) or not np.isfinite(M).all():
-            frame_bad["similarity"].append(f"{pid}: matrix shape {M.shape}")
-            continue
-        A = M[:2, :2]
-        G = A.T @ A
-        s2 = float(G[0, 0])
-        orth = abs(float(G[0, 1])) / max(s2, 1e-12)
-        eq = abs(float(G[1, 1]) / max(s2, 1e-12) - 1.0)
-        det = float(np.linalg.det(A))
-        if orth > 1e-6 or eq > 1e-6 or det <= 0.0:
-            frame_bad["similarity"].append(
-                f"{pid}: orth_err={orth:.2e} norm_ratio_err={eq:.2e} det={det:+.4f}")
-            continue
-        hom = M @ np.c_[P, np.ones(len(P))].T
-        pred = (hom[:2] / hom[2]).T
-        perr = float(np.abs(pred - lab).max())
-        if perr > 0.5:
-            frame_bad["poly"].append(f"{pid}: max {perr:.3f} px")
-        rot = float(np.degrees(np.arctan2(A[1, 0], A[0, 0])))
-        rj = piece.get("rotation_deg")
-        if rj is not None:
-            drot = abs((rot - float(rj) + 180.0) % 360.0 - 180.0)
-            if drot > 0.01:
-                frame_bad["rot"].append(f"{pid}: matrix {rot:.4f} vs rotation_deg {float(rj):.4f}")
-        x0, x1 = float(lab[:, 0].min()), float(lab[:, 0].max())
-        if abs(x0 - margin_px) > 1.0 or abs(x1 - (lw - margin_px)) > 1.0:
-            frame_bad["bbox"].append(f"{pid}: x span [{x0:.1f},{x1:.1f}] vs margin {margin_px:.1f}")
-        sl = polygon_signed_area(lab)
-        sc = polygon_signed_area(P)
-        if sl * sc <= 0:
-            frame_bad["winding"].append(f"{pid}: local {sl:+.1f} vs canvas {sc:+.1f}")
-        if int(np.lexsort((lab[:, 0], lab[:, 1]))[0]) != 0:
-            frame_bad["start"].append(pid)
-        # canonical rotation convention: the local piece is expected to sit on the
-        # local canvas with its minimum-area rectangle axis-aligned (long side x).
-        rc = cv2.minAreaRect(lab.astype(np.float32))
-        rang = float(rc[2]) % 90.0
-        long_axis_deg.append(min(rang, 90.0 - rang))
-    if frame_det["n"]:
-        record("local frame transform is a reflection-free similarity",
-               "PASS" if not frame_bad["similarity"] else "FAIL",
-               f"M^T M = s^2 I with det > 0 (similarity, no reflection) for "
-               f"{frame_det['n']}/{len(pieces)} pieces"
-               if not frame_bad["similarity"] else f"{frame_bad['similarity'][:6]}")
-        record("local frame transform reproduces normalized_corners_px",
-               "PASS" if not frame_bad["poly"] and not frame_bad["rot"] else "FAIL",
-               "M @ corners_px == normalized_corners_px (<= 0.5 px) and rotation_deg == "
-               "atan2(M10, M00) for all pieces"
-               if not frame_bad["poly"] and not frame_bad["rot"]
-               else f"{frame_bad['poly'][:4]} {frame_bad['rot'][:4]}")
-        record("local canvas frame consistent (margin box, winding)",
-               "PASS" if not frame_bad["bbox"] and not frame_bad["winding"] else "FAIL",
-               f"polygon x-span exactly [{margin_px:.0f}, {lw - margin_px:.0f}] = "
-               f"{lw:.0f} - 2*{margin_px:.0f} for all pieces; local winding == canvas winding"
-               if not frame_bad["bbox"] and not frame_bad["winding"]
-               else f"{frame_bad['bbox'][:4]} {frame_bad['winding'][:4]}")
-        n_start = len(frame_bad["start"])
-        record("documented start-corner rule preserved in the local canvas",
-               "PASS" if n_start == 0 else "WARN",
-               "first local corner is top-most then left-most for all pieces"
-               if n_start == 0 else
-               f"rule holds for {frame_det['n'] - n_start}/{frame_det['n']} pieces only: the "
-               f"canvas-frame start corner ({top.get('corner_order', 'n/a')}) is rotated with the "
-               f"piece, so normalized_corners_px lists a different starting vertex "
-               f"({sorted(frame_bad['start'][:16])})")
-        record("canonical rotation applied (min-area rect axis-aligned)",
-               "PASS" if max(long_axis_deg) <= 2.0 else "WARN",
-               f"local min-area-rect deviation from the canvas axes: min {min(long_axis_deg):.2f}, "
-               f"median {float(np.median(long_axis_deg)):.2f}, max {max(long_axis_deg):.2f} deg"
-               + ("" if max(long_axis_deg) <= 2.0 else
-                  " (min-area-rect canonicalisation is ill-conditioned for near-square pieces; "
-                  "the orientation convention is only partly canonical)"))
-        details["normalized_frame"] = {
-            "n_pieces": frame_det["n"], "margin_px": margin_px,
-            "local_size_px": [lw, lh], "long_axis_deviation_deg": long_axis_deg,
-            "start_rule_failures": frame_bad["start"],
-            "bbox_failures": frame_bad["bbox"], "winding_failures": frame_bad["winding"],
-        }
+        n = len(P)
+        L = f["base_side_index"]
+        base, image, size = f["base"], f["image"], f["size"]
+        # (a) the recorded bookkeeping must describe the derived frame
+        rep_idx = piece.get("base_side_index")
+        if rep_idx is None or int(rep_idx) != L:
+            fb["derive"].append(f"{pid}: base_side_index {rep_idx!r} vs derived {L}")
+        rep_len = piece.get("base_length_px")
+        if rep_len is None or abs(float(rep_len) / f["base_length"] - 1.0) > 5e-4:
+            fb["derive"].append(f"{pid}: base_length_px {rep_len!r} vs derived {f['base_length']:.6f}")
+        if n > 1 and f["second_longest"] > f["base_length"] * (1.0 - 1e-9):
+            fb["derive"].append(f"{pid}: base side is not uniquely the longest "
+                                f"({f['base_length']:.3f} vs {f['second_longest']:.3f} px)")
+        be = piece.get("base_edge")
+        if not isinstance(be, dict):
+            fb["derive"].append(f"{pid}: base_edge record missing")
+        else:
+            if be.get("id") != pid:
+                fb["derive"].append(f"{pid}: base_edge.id {be.get('id')!r}")
+            rec_len = be.get("baseLength")
+            if rec_len is None or abs(float(rec_len) - f["base_length"]) > 2e-3:
+                fb["derive"].append(f"{pid}: base_edge.baseLength {rec_len!r} vs derived {f['base_length']:.6f}")
+            for k, key in ((2, "p2"), (3, "p3")):
+                rec = be.get(key)
+                if rec is None:
+                    fb["derive"].append(f"{pid}: base_edge.{key} missing")
+                    continue
+                err = float(np.abs(np.asarray(rec, float).ravel()[:2] - base[k]).max())
+                if err > 2e-3:
+                    fb["derive"].append(f"{pid}: base_edge.{key} off {err:.2e} px")
+        # (b) the derived base frame itself obeys the documented axes
+        if float(np.abs(base[0]).max()) > 1e-9:
+            fb["quad"].append(f"{pid}: P0={base[0].tolist()} not (0,0)")
+        if abs(float(base[1][1])) > 1e-6 or abs(float(base[1][0]) - f["base_length"]) > 1e-6:
+            fb["quad"].append(f"{pid}: P1={base[1].tolist()} not (baseLength,0)")
+        below = [k for k in range(2, n) if float(base[k][1]) <= 0.0]
+        if below:
+            fb["quad"].append(f"{pid}: corners {below} not below the base")
+        sa = float(polygon_signed_area(base))
+        if sa <= 0.0:
+            fb["quad"].append(f"{pid}: signed area {sa:+.1f} (expected > 0, clockwise in y-down)")
+        if not convexity(base)["convex"]:
+            fb["quad"].append(f"{pid}: base-frame quad not strictly convex")
+        if abs(sa / float(polygon_signed_area(P)) - 1.0) > 1e-9:
+            fb["quad"].append(f"{pid}: base-frame area != canvas area")
+        if float(np.min(f["edge_lengths"])) < 20.0:
+            fb["quad"].append(f"{pid}: min side {float(np.min(f['edge_lengths'])):.1f} px")
+        # (c) recorded matrices: unit rotation applied to the ROLLED corner list
+        M = piece.get("rectified_to_base_edge_matrix")
+        Mp = piece.get("rectified_to_piece_matrix")
+        if M is None or Mp is None:
+            fb["matrix"].append(f"{pid}: matrix missing")
+        else:
+            M = np.asarray(M, np.float64)
+            Mp = np.asarray(Mp, np.float64)
+            if (M.shape != (3, 3) or Mp.shape != (3, 3)
+                    or not np.isfinite(M).all() or not np.isfinite(Mp).all()):
+                fb["matrix"].append(f"{pid}: matrix shape/values {M.shape}/{Mp.shape}")
+            else:
+                A = M[:2, :2]
+                unit_err = float(np.abs(A.T @ A - np.eye(2)).max())
+                det = float(np.linalg.det(A))
+                if unit_err > 1e-6 or det <= 0.0:
+                    fb["matrix"].append(f"{pid}: |A^T A - I|={unit_err:.2e}, det={det:+.6f} "
+                                        f"(piece_scale is 1.0, so the linear part must be a rotation)")
+                Prow = np.roll(P, -L, axis=0)
+                hom = M @ np.c_[Prow, np.ones(n)].T
+                pred = (hom[:2] / hom[2]).T
+                err = float(np.abs(pred - base).max())
+                if err > 2e-3:
+                    fb["matrix"].append(f"{pid}: base matrix round-trip off {err:.2e} px "
+                                        f"(corners_px must be rolled by -base_side_index)")
+                homp = Mp @ np.c_[Prow, np.ones(n)].T
+                predp = (homp[:2] / homp[2]).T
+                errp = float(np.abs(predp - image).max())
+                if errp > 2e-3:
+                    fb["matrix"].append(f"{pid}: crop matrix round-trip off {errp:.2e} px")
+                if float(np.abs(A - Mp[:2, :2]).max()) > 1e-8:
+                    fb["matrix"].append(f"{pid}: base/crop matrices differ in the linear part")
+                t_off = Mp[:2, 2] - M[:2, 2]
+                if float(np.abs(t_off - margin_px).max()) > 1e-6:
+                    fb["matrix"].append(f"{pid}: crop translation offset {t_off.tolist()} != margin {margin_px:g}")
+                rot = float(np.degrees(np.arctan2(A[1, 0], A[0, 0])))
+                rj = piece.get("rotation_deg")
+                if rj is None or abs((rot - float(rj) + 180.0) % 360.0 - 180.0) > 1e-3:
+                    fb["rot"].append(f"{pid}: rotation_deg {rj!r} vs matrix angle {rot:.6f}")
+        # (d) rounded preview fields must match the full-precision frame
+        bc = piece.get("base_edge_corners_px")
+        ic = piece.get("image_corners_px")
+        if bc is None or ic is None:
+            fb["preview"].append(f"{pid}: preview corners missing")
+        else:
+            bc = np.asarray(bc, np.float64)
+            ic = np.asarray(ic, np.float64)
+            if bc.shape != base.shape or ic.shape != image.shape:
+                fb["preview"].append(f"{pid}: preview shapes {bc.shape}/{ic.shape}")
+            else:
+                eb = float(np.abs(bc - base).max())
+                ei = float(np.abs(ic - image).max())
+                if eb > 2e-3 or ei > 2e-3:
+                    fb["preview"].append(f"{pid}: base preview off {eb:.2e} px, image preview off {ei:.2e} px")
+        # (e) crop size, margin band and horizontal base edge
+        rep_size = piece.get("piece_size_px")
+        if not (isinstance(rep_size, (list, tuple)) and len(rep_size) == 2
+                and [int(v) for v in rep_size] == size):
+            fb["crop"].append(f"{pid}: piece_size_px {rep_size!r} vs derived {size}")
+        if abs(float(image[0][1]) - margin_px) > 1e-6 or abs(float(image[1][1]) - margin_px) > 1e-6:
+            fb["margin"].append(f"{pid}: base edge not horizontal at y={margin_px:g} "
+                                f"(P0.y {image[0][1]:.6f}, P1.y {image[1][1]:.6f})")
+        if float(image[:, 0].min()) < margin_px - 2e-3 or float(image[:, 1].min()) < margin_px - 2e-3:
+            fb["margin"].append(f"{pid}: piece not inset by margin (min {image.min(axis=0).tolist()})")
+        if (float(image[:, 0].max()) > size[0] - margin_px + 1e-6
+                or float(image[:, 1].max()) > size[1] - margin_px + 1e-6):
+            fb["margin"].append(f"{pid}: piece exceeds the margin band ({image.max(axis=0).tolist()} in {size})")
+        # (f) the shared normalised canvas is gone in v1.4.0
+        for stale in ("normalized_corners_px", "piece_output_size_px"):
+            if stale in piece:
+                fb["deprecated"].append(f"{pid}:{stale}")
+        frame_rows.append({"piece_id": pid, "base_side_index": L,
+                           "base_length_px": f["base_length"], "crop_size_px": size})
+    if frame_rows:
+        n_fr = len(frame_rows)
+        record("base-edge frame record consistent with the derived frame",
+               "PASS" if not fb["derive"] else "FAIL",
+               f"base_side_index / base_length_px / base_edge{{baseLength,p2,p3}} match the frame "
+               f"derived from corners_px (<= 2e-3 px) for all {n_fr} pieces"
+               if not fb["derive"] else f"{fb['derive'][:8]}")
+        record("base-edge frame axes: P0=(0,0), P1=(baseLength,0), corners below, clockwise",
+               "PASS" if not fb["quad"] else "FAIL",
+               f"all {n_fr} pieces: positive signed area in the y-down base frame, strictly convex, "
+               f"corners 2..3 below the base, min side >= 20 px"
+               if not fb["quad"] else f"{fb['quad'][:8]}")
+        record("unit-scale rotation matrix round-trips corners_px (rolled by base_side_index)",
+               "PASS" if not fb["matrix"] else "FAIL",
+               f"|A^T A - I| <= 1e-6, det > 0 (piece_scale 1.0), M @ roll(corners_px, -base_side_index) "
+               f"== base_edge_corners_px <= 2e-3 px and crop matrix translation = base + margin, "
+               f"for all {n_fr} pieces" if not fb["matrix"] else f"{fb['matrix'][:8]}")
+        record("rotation_deg describes the base-edge frame",
+               "PASS" if not fb["rot"] else "FAIL",
+               f"rotation_deg == atan2(A10, A00) for all {n_fr} pieces"
+               if not fb["rot"] else f"{fb['rot'][:8]}")
+        record("rounded preview fields match the full-precision frame (3 dp)",
+               "PASS" if not fb["preview"] else "FAIL",
+               f"base_edge_corners_px / image_corners_px agree with the derived frame within 2e-3 px"
+               if not fb["preview"] else f"{fb['preview'][:8]}")
+        record("piece_size_px == ceil(base bbox + 2 * margin)",
+               "PASS" if not fb["crop"] else "FAIL",
+               f"crop sizes {sorted({tuple(r['crop_size_px']) for r in frame_rows})} for all {n_fr} pieces"
+               if not fb["crop"] else f"{fb['crop'][:8]}")
+        record("crop obeys the margin band and keeps the base edge horizontal",
+               "PASS" if not fb["margin"] else "FAIL",
+               f"P0/P1 sit at y={margin_px:g}, every corner is inset by >= {margin_px:g} px and the "
+               f"piece fits inside its crop (base frame at 1:1 scale)"
+               if not fb["margin"] else f"{fb['margin'][:8]}")
+        record("normalised-canvas fields removed from the piece records",
+               "PASS" if not fb["deprecated"] else "WARN",
+               "no normalized_corners_px / piece_output_size_px in any piece record"
+               if not fb["deprecated"] else f"still present: {fb['deprecated'][:8]}")
     else:
-        record("local frame transform is a reflection-free similarity", "WARN",
-               "no local polygons recovered - check not evaluable")
+        record("base-edge frame record consistent with the derived frame", "WARN",
+               "no pieces with derivable corners - check not evaluable")
+    details["base_edge_frame"] = {
+        "margin_px": margin_px,
+        "n_pieces": len(frame_rows),
+        "crop_sizes": {r["piece_id"]: r["crop_size_px"] for r in frame_rows},
+        "base_side_index": {r["piece_id"]: r["base_side_index"] for r in frame_rows},
+        "base_length_px": {r["piece_id"]: r["base_length_px"] for r in frame_rows},
+        "derive_failures": fb["derive"],
+        "quad_failures": fb["quad"],
+        "matrix_failures": fb["matrix"],
+        "margin_failures": fb["margin"],
+    }
+
+    # --------------------------------- pieces_base_edge.json (Stage 3 hand-off)
+    print("\n--- minimal Stage 3 hand-off: pieces_base_edge.json ---")
+    bjson = None
+    if not BASE_JSON.exists():
+        record("pieces_base_edge.json present", "FAIL",
+               f"{BASE_JSON.relative_to(ROOT)} is missing (it is the Stage 3 hand-off)")
+    else:
+        bjson = load_json(BASE_JSON)
+        details["pieces_base_edge_json"] = {"path": str(BASE_JSON),
+                                            "keys": sorted(bjson.keys()),
+                                            "bytes": BASE_JSON.stat().st_size}
+        required_b = ("schema_version", "algorithm_version", "coordinate_system", "unit_scale",
+                      "px_per_mm", "session_id", "piece_count", "pieces")
+        missing_b = [k for k in required_b if k not in bjson]
+        record("pieces_base_edge.json schema", "PASS" if not missing_b else "FAIL",
+               "required keys present" if not missing_b else f"missing: {missing_b}")
+        stmt_bad = []
+        if bjson.get("coordinate_system") != top.get("coordinate_system"):
+            stmt_bad.append(f"coordinate_system {bjson.get('coordinate_system')!r}")
+        if bjson.get("algorithm_version") != top.get("algorithm_version"):
+            stmt_bad.append(f"algorithm_version {bjson.get('algorithm_version')!r}")
+        if bjson.get("session_id") != top.get("session_id"):
+            stmt_bad.append(f"session_id {bjson.get('session_id')!r} vs {top.get('session_id')!r}")
+        us = bjson.get("unit_scale")
+        if not (isinstance(us, (int, float)) and abs(float(us) - 1.0) <= 1e-9):
+            stmt_bad.append(f"unit_scale {us!r} (expected 1.0)")
+        if not np.allclose(np.asarray(bjson.get("px_per_mm", []), float),
+                           np.asarray(px_per_mm, float), atol=1e-9):
+            stmt_bad.append(f"px_per_mm {bjson.get('px_per_mm')!r} vs {px_per_mm}")
+        record("pieces_base_edge.json metadata agrees with pieces.json",
+               "PASS" if not stmt_bad else "FAIL",
+               "coordinate_system / algorithm_version / session_id / unit_scale=1.0 / px_per_mm all agree"
+               if not stmt_bad else f"{stmt_bad}")
+        bp = bjson.get("pieces")
+        n_bp = len(bp) if isinstance(bp, list) else 0
+        record("pieces_base_edge.json piece count",
+               "PASS" if isinstance(bp, list) and n_bp == len(pieces) else "FAIL",
+               f"{n_bp} records vs {len(pieces)} pieces")
+        bmap = {}
+        if isinstance(bp, list):
+            bmap = {str(r.get("id")): r for r in bp if isinstance(r, dict)}
+        bbad = []
+        max_prec = 0.0
+        for i, piece in enumerate(pieces):
+            pid = ids[i] if i < len(ids) else f"#{i}"
+            rec = bmap.get(pid)
+            if rec is None:
+                bbad.append(f"{pid}: missing record")
+                continue
+            pj_be = piece.get("base_edge") if isinstance(piece.get("base_edge"), dict) else {}
+            for key in ("baseLength", "p2", "p3"):
+                if key not in rec:
+                    bbad.append(f"{pid}: missing {key}")
+                    continue
+                pv = pj_be.get(key)
+                if pv is None:
+                    bbad.append(f"{pid}: pieces.json base_edge.{key} missing")
+                    continue
+                d = float(np.abs(np.asarray(rec[key], float) - np.asarray(pv, float)).max())
+                max_prec = max(max_prec, d)
+                if d > 1e-12:
+                    bbad.append(f"{pid}: {key} differs by {d:.2e} px")
+        extra = sorted(set(bmap) - set(ids))
+        record("pieces_base_edge.json == pieces.json base_edge (full precision)",
+               "PASS" if not bbad and not extra else "FAIL",
+               f"{len(pieces)}/{len(pieces)} id/baseLength/p2/p3 bitwise equal (max diff {max_prec:.2e} px)"
+               if not bbad and not extra else f"{bbad[:8]} extra_ids={extra[:8]}")
+        if isinstance(bp, list):
+            border_ok = [str(r.get("id")) for r in bp if isinstance(r, dict)] == ids
+            record("pieces_base_edge.json keeps the scan order", "PASS" if border_ok else "WARN",
+                   "records in the same S01..S16 scan order as pieces.json" if border_ok
+                   else "record order differs from pieces.json")
 
     # pairwise overlap of detected polygons in the rectified canvas
     valid = [p for p in detected_polys if p is not None]
@@ -1421,7 +1676,10 @@ def main() -> int:
             "extractor_vs_photo_px": fitr.get("photo_corner_err_px"),
             "extractor_vs_photo_iou_estimator_px": fitr.get("photo_iou_corner_err_px"),
             "mask_area_px": mask_areas[idx] if idx < len(mask_areas) else None,
-            "local_polygon_source": local_info[idx] if idx < len(local_info) else None,
+            "crop_frame": "derived:base_edge" if idx < len(frames_ok) and frames_ok[idx] else None,
+            "base_side_index": frames[idx]["base_side_index"] if idx < len(frames_ok) and frames_ok[idx] else None,
+            "base_length_px": frames[idx]["base_length"] if idx < len(frames_ok) and frames_ok[idx] else None,
+            "crop_size_px": frames[idx]["size"] if idx < len(frames_ok) and frames_ok[idx] else None,
         })
     details["pieces"] = pieces_table
 
@@ -1444,68 +1702,62 @@ def main() -> int:
     return 1 if fails else 0
 
 
-def mask_contour_polygon_or_hull(mask: np.ndarray) -> np.ndarray:
-    """Best-effort outline of a binary mask (convex hull, sub-pixel not needed)."""
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cnts:
-        return np.zeros((1, 2), dtype=np.float64)
-    cnt = max(cnts, key=cv2.contourArea)
-    hull = cv2.convexHull(cnt).reshape(-1, 2).astype(np.float64)
-    return hull
+def crop_size_from_base(base: np.ndarray, margin: float) -> list[int]:
+    """Whole-pixel crop size for a piece in its own base-edge frame.
 
-
-def local_polygon_for_piece(piece: dict, canvas_poly, piece_hw, mask: np.ndarray):
-    """Polygon of the piece in its own normalised canvas (if recoverable).
-
-    Preference order: explicit JSON local corners -> 3x3 rectified->piece matrix
-    -> shape-only registration of the canvas polygon to the mask outline.
+    base is the polygon in the base-edge frame (P0=(0,0), P1=(baseLength,0),
+    remaining corners below); the crop is that frame translated by `margin`
+    and rounded up, so the piece is fully inside with at least one margin band.
     """
-    if canvas_poly is None:
-        return None, "no canvas polygon"
-    key_sets = ["normalized_corners_px", "local_corners_px", "piece_corners_px",
-                "corners_piece_px", "corners_normalized_px"]
-    for key in key_sets:
-        if key in piece:
-            try:
-                arr = np.asarray(piece[key], dtype=np.float64)
-                if arr.ndim == 2 and arr.shape[1] == 2 and len(arr) == len(canvas_poly):
-                    return canonical_orientation(arr), f"json:{key}"
-            except Exception:  # noqa: BLE001
-                pass
-    # Try any 3x3 matrix in the piece record, both directions/conventions.
-    matrices = []
-    for key, val in piece.items():
-        if "matrix" in key.lower():
-            try:
-                M = np.asarray(val, dtype=np.float64)
-                if M.shape == (3, 3):
-                    matrices.append((key, M))
-            except Exception:  # noqa: BLE001
-                pass
-    for key, M in matrices:
-        for label, MM in ((key, M), (key + ":inverse", np.linalg.inv(M))):
-            for conv in ("col", "row"):
-                pts = np.asarray(canvas_poly, dtype=np.float64)
-                if conv == "col":
-                    hom = MM @ np.hstack([pts, np.ones((len(pts), 1))]).T
-                    out = (hom[:2] / hom[2:3]).T
-                else:
-                    hom = np.hstack([pts, np.ones((len(pts), 1))]) @ MM.T
-                    out = hom[:, :2] / hom[:, 2:3]
-                if not np.all(np.isfinite(out)):
-                    continue
-                if (out[:, 0].min() >= -5 and out[:, 1].min() >= -5
-                        and out[:, 0].max() <= piece_hw[1] + 5 and out[:, 1].max() <= piece_hw[0] + 5):
-                    if polygon_area(out) > 1.0:
-                        return canonical_orientation(out), f"json:{label}({conv})"
-    # Fallback: register the canvas polygon to the actual mask outline (shape only).
-    if mask is not None:
-        mask_poly = mask_largest_contour_polygon(mask)
-        if mask_poly is not None and len(mask_poly) == len(canvas_poly):
-            fit = best_correspondence(np.asarray(canvas_poly, dtype=np.float64), mask_poly)
-            if fit["max_err"] < 5.0:
-                return canonical_orientation(fit["pred"]), f"mask-registered (fit err {fit['max_err']:.2f} px)"
-    return None, "unrecoverable"
+    b = np.asarray(base, dtype=np.float64)
+    w = int(np.ceil(float(b[:, 0].max() + 2.0 * margin)))
+    h = int(np.ceil(float(b[:, 1].max() + 2.0 * margin)))
+    return [max(1, w), max(1, h)]
+
+
+def derive_base_edge_frame(corner_px, margin: float) -> dict:
+    """Independently derive the v1.4.0 base-edge frame from the canvas corners.
+
+    The frame is a pure function of `corners_px`, so the extractor's own
+    bookkeeping (base_side_index, base_length_px, base_edge, matrices, crop
+    size) can be checked against it without importing Stage 2 code:
+
+      * the longest side is the base: p0 = P[L], p1 = P[(L+1) % n];
+      * p0 -> (0, 0) and p1 -> (baseLength, 0) under a rigid rotation
+        R = [[u0, u1], [-u1, u0]] with u = (p1 - p0) / baseLength, which keeps
+        the polygon handedness, so the remaining corners sit below (y > 0);
+      * the crop is that frame shifted by (margin, margin) at 1:1 scale.
+
+    Returns the base-frame polygon (`base`), the crop-frame polygon (`image`),
+    the rotation (`rotation`), the crop size (`size`), the base side index and
+    the original edge lengths.
+    """
+    P = np.asarray(corner_px, dtype=np.float64)
+    n = len(P)
+    edges = np.linalg.norm(np.roll(P, -1, axis=0) - P, axis=1)
+    L = int(np.argmax(edges))
+    p0 = P[L]
+    p1 = P[(L + 1) % n]
+    d = p1 - p0
+    base_length = float(np.linalg.norm(d))
+    if base_length <= 0.0:
+        raise ValueError("degenerate base edge")
+    u = d / base_length
+    R = np.array([[u[0], u[1]], [-u[1], u[0]]], dtype=np.float64)
+    order = [(L + k) % n for k in range(n)]
+    base = np.array([R @ (P[j] - p0) for j in order], dtype=np.float64)
+    margin_arr = np.array([margin, margin], dtype=np.float64)
+    image = base + margin_arr
+    return {
+        "base_side_index": L,
+        "base_length": base_length,
+        "rotation": R,
+        "base": base,
+        "image": image,
+        "size": crop_size_from_base(base, margin),
+        "edge_lengths": edges,
+        "second_longest": float(np.sort(edges)[-2]) if n > 1 else 0.0,
+    }
 
 
 def _write_result(verdict: str) -> None:

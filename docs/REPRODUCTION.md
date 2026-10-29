@@ -179,4 +179,4 @@ git checkout -- stage1_capture_calibration/output
 
 ## 7. 第二部分（Stage 2）
 
-第二部分已完成，实现与验证报告见 **`docs/REPRODUCTION_STAGE2.md`**（产物：`stage2_piece_extraction/output/pieces.json` + 16×3 张归一化图，16/16 检出、确定性可复现、`python -m unittest discover -s tests -v` 34 项全绿）。
+第二部分已完成，实现与验证报告见 **`docs/REPRODUCTION_STAGE2.md`**（产物：`stage2_piece_extraction/output/pieces.json`、`pieces_base_edge.json` + 16×3 张基边 1:1 裁剪图，16/16 检出、确定性可复现、`python -m unittest discover -s tests -v` 67 项全绿）。

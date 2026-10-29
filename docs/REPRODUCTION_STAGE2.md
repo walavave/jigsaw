@@ -9,7 +9,8 @@
 
 1. 用空桌面图做背景差分，把 16 个手剪纸片从深色桌面上分割出来；
 2. 对每片拟合亚像素精度的直边凸多边形角点；
-3. 做局部归一化，输出 512×512 的 RGBA / mask / debug 图；
+3. 以每片**最长边为基边**做 1:1 裁剪，输出 `{id, baseLength, p2, p3}` 的全精度交接记录，
+   以及对应的 RGBA / mask / debug 图（尺寸逐片不同，不做缩放）；
 4. 分配扫描编号 `S01..S16`（与源编号 `P01..P16` 无关，由 Stage 3 匹配），
    并把结果写成 `pieces.json` 交给 Stage 3。
 
@@ -39,32 +40,48 @@ python stage2_piece_extraction/extract_pieces.py
 当前输出：
 
 ```text
-Pieces: 16/16 (canvas 2640x2640, normalized 512x512)
+Pieces: 16/16 (canvas 2640x2640, base-edge crop 1:1, margin 20px)
 Segmentation: threshold=25.0 foreground=33.73% border_ignore=40px
 Quality: min=0.8894 median=0.9248
 Area px: min=114134 max=165124 total=2313710
 Manual review: S06 (short_side)
 ```
 
-产物：`stage2_piece_extraction/output/pieces.json` + `output/pieces/`
-下 16×3 张图（`S01_rgba.png`、`S01_mask.png`、`S01_debug.png`，共 48 张）。
+产物：`stage2_piece_extraction/output/pieces.json`、`output/pieces_base_edge.json`
++ `output/pieces/` 下 16×3 张图（`S01_rgba.png`、`S01_mask.png`、`S01_debug.png`，共 48 张，
+尺寸逐片不同，例如 S01 614×307、S06 738×323）。
 
-交付版本是 `stage2-extract-1.2.1`：相对 1.2.0 只改**元数据**——`inputs` 从本机绝对路径改成仓库根相对
-POSIX 路径、每片新增 `normalized_short_side_px`、修正告警文案（`Manual review: S06 (short_side)`，
-而不是笼统的 "below min_quality"）。几何完全没动，证据是 48 张产物图与 1.2.0 的 SHA256 逐字节相同
-（`pieces.json` 因元数据变化而不同）。
+版本演进（每版都有逐字节/数值证据）：
+
+- `stage2-extract-1.2.1`：相对 1.2.0 只改**元数据**——`inputs` 从本机绝对路径改成仓库根相对
+  POSIX 路径、修正告警文案（`Manual review: S06 (short_side)`，而不是笼统的
+  "below min_quality"）。几何完全没动，证据是 48 张产物图与 1.2.0 的 SHA256 逐字节相同。
+- `stage2-extract-1.3.0`：为 `backgrounds/` 的程序化底面加入 `mask_erode_px`、
+  `shadow_rejection*`、`half_level_response` 三个可选开关（默认值关闭/不变，bench 夹具的
+  48 张图仍与 1.2.1 逐字节相同）。
+- `stage2-extract-1.4.0`（**当前交付**）：按用户要求把“归一化到 512 画布”换成
+  “以最长边为基边、1:1 裁剪”，新增 `output/pieces_base_edge.json` 作为交接主格式，
+  去掉配置项 `piece_output_size_px`。检测几何（`corners_px`）与 1.3.0 完全一致，
+  变的只是每片裁剪坐标系与产物尺寸。
 
 ## 4. 算法与关键决策
 
 完整算法见 `stage2_piece_extraction/README.md`；这里只记录“为什么这样做”和对应的证据。
+
+> **与上游 README §4.2 的契约偏离（用户要求，1.4.0 起）**：README 写的是把每片归一化到
+> `piece_size_px=[512,512]` 的固定画布；本实现改为“最长边为基边 + 1:1 裁剪”，交接主格式是
+> `output/pieces_base_edge.json` 的 `{id, baseLength, p2, p3}`（全精度），`pieces.json` 里仍有
+> `corners_px` / `center_px` / `area_px` / `quality` 等全部必需字段，但不再有顶层
+> `piece_size_px`。偏离的理由见下表最后一组，验证数字见 §5.3。
 
 | 决策 | 理由 / 证据 |
 | --- | --- |
 | 掩码用 **Lab 颜色差** 做 Otsu，Laplacian 差分只给 `half_level` 定位用 | 把梯度项加进 Otsu 会把阈值抬到 45+（纸面印刷内容太暗），在 25 处夹住才不啃边；而梯度项参与 `gradient_max` 定位会把峰值系统性内拉 **0.69 px**（见下一行） |
 | `gradient_max` 定位跑在 **Lab 颜色响应** 上（不是边缘响应） | 同一条边用 4 种绝对边缘定义（灰度梯度峰、灰度 50%、遮挡差分梯度峰、遮挡差分 50%）互相验证，散布仅 0.14 px；1.1.0 的内缩就是 Laplacian 项造成的，换响应后 64 条边的有符号偏移从 −0.660 px 回到 **+0.047 px** |
 | 每边加 **±3 px 单边保护**（`max_side_shift_px`），越界退回 `half_level` 的边 | 短边/弱对比边容易峰选偏（1.1.0 里 S06 e3 偏 5.7 px、S05 e0 偏 5.9 px）；保护是把“整条边飞走”变成“退回保守结果”。本数据集上从未触发（两套定位在 64 条边上差都 < 1.5 px），保留作换数据时的保险 |
-| 归一化只做**相似变换**（等比缩放 + 旋转 + 平移），不做透视 | 碎片是平的，第一阶段已整流到桌面平面；再做四角单应只会增加插值误差。README §4.2 允许“局部透视归一化”，这里等价且更稳 |
-| 归一化朝向取**角点二阶矩主轴**（特征向量取 x≥0 的符号） | 比 `minAreaRect` 的角度约定更不容易踩坑，且完全由形状决定（同一片两次运行朝向一致）。近似正方形的主轴不稳定，本夹具都是细长四边形，不触发 |
+| 每片按**最长边为基边**做 1:1 裁剪（`P0=(0,0)`、`P1=(baseLength,0)`，顺时针），不缩放、不做透视 | 交接要的是"可直接拼"的数据：基边长度就是真实长度、起点在原点、朝向由基边给出，下游不必再猜缩放与角度；1:1 也避免把薄片短边压缩到亚像素。碎片是平的，第一阶段已整流到桌面平面，再做四角单应只会增加插值误差（README §4.2 允许“局部透视归一化”，这里等价且更稳） |
+| 旋转只由**基边方向**决定，不再用角点二阶矩主轴 | 主轴的符号在近似正方形上不稳定，而基边方向是离散且可解释的（最长边 → +x）；同一片两次运行完全确定，且基边信息本身就是交接契约要求的 |
+| 基边坐标系变换为**纯旋转+平移**（`unit_scale: 1.0`） | 所有碎片天然共用“整流画布像素”一个单位，`baseLength` 可跨片比较；缩放会破坏这个可比性 |
 | 编号用**行聚类**（y 差 ≤ 2 px 视为同一行，行内按 x） | 1.1.0 里 S14/S15 的中心 y 只差 0.10 px 却因亚像素抖动交换了编号；行聚类把“同一视觉行”的判定变成相对量，编号恢复稳定 |
 | 质量分保留 0.35/0.25/0.20/0.10/0.10 权重；`needs_manual_review` 是**三分支告警** | 曾试图把“两套定位方法的分歧”加权进质量分，会把正常 1.5 px 的分歧也罚下 0.85 线，已回退；改为独立告警分支：`quality_below_min` / `short_side`（<100 px）/ `localizer_disagreement`（>3 px），并写进 `manual_review_reasons` |
 | 退出码语义改为 `fail_on_manual_review`（默认 false） | 质量告警是交接提示，不是流水线失败：Stage 3 仍应拿到几何结果 |
@@ -80,7 +97,8 @@ POSIX 路径、每片新增 `normalized_short_side_px`、修正告警文案（`M
 
 ## 5. 独立验证
 
-验证脚本 **`docs/verify_stage2.py`**（59 项检查，只读仓库、只写 `tmp/`）用一套与被检结果无关的
+验证脚本 **`docs/verify_stage2.py`**（73 项检查，只读仓库、只写 `tmp/`；1.4.0 版新增 20 项基边契约检查、
+删掉 6 项已废弃的 512 画布检查）用一套与被检结果无关的
 参考量做对照：
 
 - **参考四边形（grad-quad）**：对每条边取 13 条剖面，用灰度梯度的最大值 + 抛物线细化定位，
@@ -112,7 +130,9 @@ python docs/verify_stage2.py     # 写 tmp/verify_stage2_result.json 与 overlay
 单边绝对偏移的中位数 0.36 px，55/64 条边 ≤ 1 px；角点误差中位数 0.86 px。
 与 1.0.0 相比 16 片里 13 片严格变好，没有一片变差超过 0.11 px。1.1.0 的“面积真值 +0.03%”
 其实是 0.69 px 内缩抵消出来的假精度（面积靠内缩“变准”，但每条边都偏了）。
-交付版本 1.2.1 的几何与 1.2.0 逐字节相同（48 张产物图 SHA256 一致），因此这一行就是交付几何的实测值。
+交付版本 1.2.1 的几何与 1.2.0 逐字节相同（48 张产物图 SHA256 一致）。当前交付版本 **1.4.0** 的
+检测几何（`corners_px`）也与 1.2.0/1.2.1/1.3.0 完全一致——1.3.0 只加了可选的背景开关（bench 上
+不生效），1.4.0 只换了每片的裁剪坐标系与产物尺寸；因此上表与下面的面积/尺度结论同样适用于交付版本。
 
 ### 5.2 面积与打印尺度
 
@@ -132,11 +152,15 @@ python docs/verify_stage2.py     # 写 tmp/verify_stage2_result.json 与 overlay
   注意这个 IoU 是**提取器自报**（细化多边形 vs 粗掩膜），仓库里没有人工标注掩码，因此 README §4.4
   的“mask IoU > 0.98（对人工标注）”这一条**没有被独立认证**；保存的 `mask.png` 本身按定义就是
   所报多边形的像素栅格（重建 IoU ≈ 1.0），拿它再比一次是循环论证。
-- 确定性：同一输入连续两次运行，`output/` 下 50 个文件 SHA256 全部相同。
-- 单元测试：`python -m unittest discover -s tests -v` → **64 项全绿**（本部分 22 + `tests/test_backgrounds.py` 30 + 阶段一 12）
-  （`tests/test_stage2_extraction.py` 22 项：纯函数、合成 16 片端到端（含确定性）、真实数据集成；
+- 基边契约：`output/pieces_base_edge.json` 与 `pieces.json` 里的 `base_edge` 逐字段相同（全精度），
+  16 片都满足 `P0=(0,0)`、`P1=(baseLength,0)`、`P2/P3` 位于基边下方、顺时针正面积、基边确为最长边、
+  变换为纯旋转（尺度 1）、裁剪尺寸 = 旋转后包围盒 + 2×20 px 留白。独立检查脚本
+  `tmp/verify_base_edge.py` 的 534 项断言全部通过（0 问题）。
+- 确定性：同一输入连续两次运行，`output/` 下 51 个文件 SHA256 全部相同。
+- 单元测试：`python -m unittest discover -s tests -v` → **67 项全绿**（本部分 25 + `tests/test_backgrounds.py` 30 + 阶段一 12）
+  （`tests/test_stage2_extraction.py` 25 项：纯函数、基边契约、合成 16 片端到端（含确定性）、真实数据集成；
   另有第一阶段 12 项）。合成用例里 16 片的角点误差 ≤ 1.03 px。
-- 人工检查：`docs/stage2_preview.png`（16 片归一化缩略图）与每片 `S*_debug.png`
+- 人工检查：`docs/stage2_preview.png`（16 片基边裁剪缩略图，橙色线为基边）与每片 `S*_debug.png`
   显示轮廓贴纸边、无桌面残留；`tmp/crop_S06.png` 是难点碎片 S06 的放大对照。
 
 ### 5.4 验证脚本的预期输出与判据口径
@@ -152,15 +176,16 @@ python docs/verify_stage2.py     # 写 tmp/verify_stage2_result.json 与 overlay
 | 不误检阴影/桌沿/灰尘/印刷图案 | ✅ 满足（16 片，无额外连通域，`discarded_candidates` 为空） |
 
 `python docs/verify_stage2.py` 在这份冻结数据上的**预期**结果是
-`SUMMARY: 59 checks, 2 FAIL, 7 WARN`、verdict FAIL、**退出码 1**（不要把它当成复现失败）：
+`SUMMARY: 73 checks, 2 FAIL, 5 WARN`、verdict FAIL、**退出码 1**（不要把它当成复现失败）：
 
 - 2 个 FAIL 都是“相对 `jigsaw_layout.json` 的伪真值”判据（角点 mean 4.074 / median 2.776 / max 10.663 px；
   IoU mean 0.98349 / median 0.98893 / min 0.94785），而脚本自己会用 WARN 说明：同样的统计量在照片上
   对 layout 就已经是 mean 3.897 / median 2.694 / max 10.745 px，所以这两条对任何提取器都不可达，
   它们衡量的是“手剪得像不像印刷线”。角点精度应看**对照片轮廓**的那一项（mean 1.583 / median 0.859 px）。
-- 7 个 WARN 也都是稳定且预期的：mask 循环性、mask IoU 无法独立评估、起始角点局部规则 5/16、
-  规范朝向偏差最多 21.02°、对照片四边形的一致性 1.735/1.182/6.235、两种照片估计量互差
-  median 0.955 / max 5.415（仅 S06 超 3 px）、伪真值前提本身不成立。
+- 5 个 WARN 也都是稳定且预期的：mask 循环性、README §4.4 的“对人工标注 mask IoU”无法评估、
+  对照片四边形的一致性 1.735/1.182/6.235、两种照片估计量互差 median 0.955 / max 5.415
+  （仅 S06 超 3 px）、伪真值前提本身不成立。1.4.0 去掉了随 512 画布一起消失的两条 WARN
+  （起始角点局部规则、规范朝向偏差）。
 - 判读上的两个坑：
   1. **绕向必须先规范化**。`jigsaw_layout.json` 的多边形是 y-up 存储的（在 y-down 像素坐标下鞋带面积为负），
      而 `pieces.json` 按约定是正面积；不先按有符号面积统一绕向，无镜像相似拟合会给出 200+ px 的残差，
@@ -185,26 +210,27 @@ python docs/verify_stage2.py     # 写 tmp/verify_stage2_result.json 与 overlay
   不是算法没调好；它走 `short_side` 人工复核。
 - 前景阈值依赖两张图严格同机位同光照；换拍摄条件需要重标 `threshold_max`。
 - 碎片相互接触/叠放会合并，检出数 < 16 → 退出码 1。
-- 归一化朝向上，近似正方形/圆形的主轴不稳定；Stage 3 仍会搜索旋转，因此不影响正确性。
-- **归一化后的短边小于 README §2.1 的建议值**：`normalized_short_side_px` 中位 220 px，S06 = 45 px、
-  S14 = 76 px、S13 = 163 px（建议 300–400 px）。原因是"装进 512 画布"按长边定标（缩放 0.69–0.95），
-  薄片的短边被同比缩小；而 S06 在 8 px/mm 整流图里的原生短边本来就只有 66 px，归一化到 300 px
-  就意味着长边要 3100 px，与 512 契约冲突。若 Stage 3 需要更高分辨率纹理，应回到
-  `pieces_rectified.png` 用 `corners_px`（或 `rectified_to_piece_matrix` 的逆）在原生分辨率上裁剪。
+- 基边由“最长边”决定：近似正方形、或两条长边接近的碎片，基边可能在两三条边之间摇摆
+  （本夹具最长边与次长边差 ≥ 3%，未触发）；Stage 3 仍会搜索旋转，因此不影响正确性。
+- **1:1 裁剪不放大**：逐片裁剪图沿用整流画布的像素密度，最薄三片（S06 短边 66 px、S14 119 px、
+  S13 163 px）低于 README §2.1 建议的 300–400 px。这是 8 px/mm 整流图里纸片本身的尺寸，
+  强行缩放到 300 px 只会插值糊掉；需要更多纹理细节时应提高采集 DPI 重新整流，
+  或回到 `pieces_rectified.png` 用 `corners_px` 按需裁剪。
 
 ## 7. 文件清单（本部分新增/修改）
 
 | 路径 | 说明 |
 | --- | --- |
-| `stage2_piece_extraction/extract_pieces.py` | 主体实现（约 1300 行，算法版本 `stage2-extract-1.3.0`） |
-| `stage2_piece_extraction/config/extraction.example.json` | 完整参数（含 `edge_localizer`、`max_side_shift_px`、`fail_on_manual_review`） |
-| `stage2_piece_extraction/README.md` | 中文实现文档：参数表、算法、契约（含路径解析约定）、实测结果、限制 |
+| `stage2_piece_extraction/extract_pieces.py` | 主体实现（约 1500 行，算法版本 `stage2-extract-1.4.0`） |
+| `stage2_piece_extraction/config/extraction.example.json` | 完整参数（含 `edge_localizer`、`max_side_shift_px`、`shadow_*`、`half_level_response`、`fail_on_manual_review`） |
+| `stage2_piece_extraction/README.md` | 中文实现文档：参数表、算法、基边契约（含路径解析约定）、实测结果、限制 |
 | `stage2_piece_extraction/input/README.md`（修改） | 说明默认直接读阶段一结果、此目录只用于打包/回归夹具 |
-| `stage2_piece_extraction/output/README.md`（修改） | 产物清单 + 阶段三消费方式（路径相对 `pieces.json`、薄片高分辨率用法） |
-| `stage2_piece_extraction/output/pieces.json` + `output/pieces/*.png` | 交付产物（50 个文件） |
-| `tests/test_stage2_extraction.py` | 22 项测试（合成端到端 + 真实数据集成） |
-| `docs/verify_stage2.py` | 独立验证脚本（59 项检查，只写 `tmp/`） |
-| `docs/stage2_preview.png` | 16 片归一化缩略图 |
+| `stage2_piece_extraction/output/README.md`（修改） | 产物清单 + 阶段三消费方式（路径相对 `pieces.json`、基边记录、薄片分辨率） |
+| `stage2_piece_extraction/output/pieces_base_edge.json` | **交接主格式**：16 条 `{id, baseLength, p2, p3}`（全精度） |
+| `stage2_piece_extraction/output/pieces.json` + `output/pieces/*.png` | 完整记录 + 48 张逐片裁剪图（合计 51 个文件） |
+| `tests/test_stage2_extraction.py` | 测试（合成端到端 + 基边契约 + 真实数据集成） |
+| `docs/verify_stage2.py` | 独立验证脚本（只写 `tmp/`） |
+| `docs/stage2_preview.png` | 16 片基边裁剪缩略图（橙线为基边） |
 
 ## 8. 后续扩展：换底面鲁棒性
 
@@ -214,8 +240,8 @@ python docs/verify_stage2.py     # 写 tmp/verify_stage2_result.json 与 overlay
 裸木地板次之（中位 2.28 px），裸大理石/水泥因投影并入掩膜而失败（物理限制，已量化）。
 方法与数据见 [`docs/BACKGROUNDS.md`](BACKGROUNDS.md)；`backgrounds/output/` 约 130 MB，已 gitignore。
 
-生成的产物与第一阶段一致地**保留在工作区但未提交**；若要回到原始状态执行
-`git checkout -- stage2_piece_extraction/output`（产物本身是 untracked，直接删除即可）。
+阶段二的产物（`pieces.json`、`pieces_base_edge.json`、48 张逐片图）随仓库提交，便于下游直接复现
+实验；需要回到原始状态时执行 `git checkout -- stage2_piece_extraction/output` 即可。
 
 `tmp/` 被 `.gitignore` 忽略，里面是本次迭代的诊断脚本与中间证据（`verify_stage2_report.md`、
 `diag_ab_v120_*.{json,md}`、`crop_S06.png` 等），属于“本地产物、可重新生成”，不进仓库；

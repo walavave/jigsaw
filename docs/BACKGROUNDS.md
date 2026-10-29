@@ -141,7 +141,7 @@ python backgrounds/evaluate_backgrounds.py --summary backgrounds/output/evaluati
 - `_mat_alpha` 经模糊后峰值 1.0000001（未裁剪），当严格覆盖率用需自行 `clip(0,1)`；
   `unmultiply_pieces` 在 α≈0 处有 float32 抵消误差（量级 1e-4），只影响边缘极少数像素。
 - 测试覆盖：`tests/test_backgrounds.py`（30 项）覆盖噪声/底面生成、垫布合成、`build_scene` 端到端与
-  `shadow_suspicion` / `foreground_mask`；`python -m unittest discover -s tests -v` 现为 64 项全绿。
+  `shadow_suspicion` / `foreground_mask`；`python -m unittest discover -s tests -v` 现为 67 项全绿。
 
 ## 扩展一种新底面
 

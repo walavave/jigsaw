@@ -6,7 +6,11 @@ The suite has three layers:
 2. A fully synthetic end-to-end board: a dark bench plus 16 drawn convex quads
    with a bright low-frequency texture, so the colour difference from the empty
    capture is large.  ``extract_pieces`` runs twice (once per output directory)
-   to check the byte-for-byte determinism of ``pieces.json``.
+   to check the byte-for-byte determinism of ``pieces.json`` and of the minimal
+   ``pieces_base_edge.json`` hand-off.  Every piece is cropped 1:1 in its own
+   base-edge frame (longest side P0=(0,0) -> P1=(baseLength,0), clockwise in the
+   y-down image frame), so the assertions are on that frame, not on a rescaled
+   square canvas.
 3. The real rectified capture from Stage 1, skipped when it is not available.
 
 All artefacts live in ``tempfile.TemporaryDirectory()``; nothing is written into
@@ -37,6 +41,8 @@ from extract_pieces import (  # noqa: E402
     SCAN_ROW_TOLERANCE_PX,
     _apply_transform,
     _resolve_config,
+    base_edge_frame,
+    base_edge_record,
     colour_response,
     combine_quality,
     dedupe_polygon,
@@ -44,7 +50,6 @@ from extract_pieces import (  # noqa: E402
     extract_pieces,
     foreground_mask,
     is_convex_polygon,
-    normalization_matrix,
     normalize_piece,
     ordered_polygon,
     polygon_area,
@@ -53,6 +58,7 @@ from extract_pieces import (  # noqa: E402
     polygon_signed_area,
     prune_near_collinear,
     rasterize_polygon,
+    render_debug,
     scan_order_indices,
 )
 from jigsaw_common.io import imread, imwrite, write_json  # noqa: E402
@@ -94,16 +100,25 @@ REQUIRED_PIECE_FIELDS = {
     "quality_breakdown",
     "needs_manual_review",
     "manual_review_reasons",
-    "normalized_corners_px",
+    "min_side_px",
+    # v1.4.0 base-edge frame (1:1 crop in the rectified canvas unit).
+    "base_edge",
+    "base_edge_corners_px",
+    "base_length_px",
+    "base_side_index",
     "rotation_deg",
+    "piece_size_px",
+    "image_corners_px",
     "rectified_to_piece_matrix",
+    "rectified_to_base_edge_matrix",
 }
 REQUIRED_TOP_LEVEL_FIELDS = {
     "schema_version",
     "algorithm_version",
     "session_id",
     "coordinate_system",
-    "piece_size_px",
+    "piece_frame",
+    "piece_scale",
     "piece_margin_px",
     "canvas_px",
     "px_per_mm",
@@ -117,6 +132,11 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "manual_review",
     "pieces",
 }
+# Per-piece fields that were replaced by the base-edge frame in Stage 2 1.4.0.
+REMOVED_PIECE_FIELDS = {"normalized_corners_px", "normalized_short_side_px"}
+REMOVED_TOP_LEVEL_FIELDS = {"piece_size_px"}
+# Keys of one record in ``pieces_base_edge.json`` (the minimal assembly hand-off).
+BASE_EDGE_RECORD_FIELDS = {"id", "baseLength", "p2", "p3"}
 # Documented vocabulary for ``manual_review_reasons`` (Stage 2 >= 1.1.0).
 REVIEW_REASON_VOCABULARY = frozenset(
     {"quality_below_min", "short_side", "localizer_disagreement"}
@@ -172,6 +192,184 @@ def _best_cyclic_vertex_error(detected: np.ndarray, target: np.ndarray) -> float
             rolled = np.roll(orientation, -shift, axis=0)
             best = min(best, float(np.linalg.norm(rolled - target, axis=1).max()))
     return best
+
+
+def _ordered_edge_lengths(points) -> list[float]:
+    """Lengths of the polygon edges in the given vertex order."""
+
+    points = np.asarray(points, dtype=np.float64)
+    return [
+        float(np.linalg.norm(points[(index + 1) % len(points)] - points[index]))
+        for index in range(len(points))
+    ]
+
+
+def _assert_base_edge_piece_contract(
+    test_case: unittest.TestCase, piece: dict, margin_px: float
+) -> None:
+    """Check the Stage 2 >= 1.4.0 base-edge frame of one piece.
+
+    The hand-off contract is: the longest side is the base, ``P0 = (0, 0)`` and
+    ``P1 = (baseLength, 0)``, ``P2``/``P3`` keep the clockwise (y-down) order and
+    the frame is a pure rotation (unit scale) of ``corners_px``.  The crop is the
+    frame bounding box plus ``margin_px`` on every side, at 1:1 canvas scale.
+    Everything here is derived from the payload itself, so it also works for a
+    capture whose corner coordinates the test does not know in advance.
+    """
+
+    piece_id = piece["piece_id"]
+    corners = np.asarray(piece["corners_px"], dtype=np.float64)
+    frame = np.asarray(piece["base_edge_corners_px"], dtype=np.float64)
+    record = piece["base_edge"]
+    base_length = float(piece["base_length_px"])
+    base_index = int(piece["base_side_index"])
+
+    test_case.assertEqual(frame.shape, (4, 2), msg=piece_id)
+
+    # 1) Frame definition: P0/P1 on the +x axis, P2/P3 below it, clockwise.
+    test_case.assertAlmostEqual(float(frame[0][0]), 0.0, places=9, msg=piece_id)
+    test_case.assertAlmostEqual(float(frame[0][1]), 0.0, places=9, msg=piece_id)
+    test_case.assertAlmostEqual(float(frame[1][1]), 0.0, places=9, msg=piece_id)
+    test_case.assertGreater(float(frame[2][1]), 0.0, msg=piece_id)
+    test_case.assertGreater(float(frame[3][1]), 0.0, msg=piece_id)
+    test_case.assertGreater(
+        float(polygon_signed_area(frame)), 0.0, msg=f"{piece_id}: not clockwise"
+    )
+    test_case.assertGreater(base_length, 0.0, msg=piece_id)
+
+    # 2) The minimal hand-off record agrees with the frame.
+    test_case.assertEqual(set(record), BASE_EDGE_RECORD_FIELDS, msg=piece_id)
+    test_case.assertEqual(record["id"], piece_id, msg=piece_id)
+    test_case.assertAlmostEqual(
+        float(record["baseLength"]), base_length, places=6, msg=piece_id
+    )
+    test_case.assertAlmostEqual(
+        float(record["baseLength"]), float(frame[1][0]), places=6, msg=piece_id
+    )
+    np.testing.assert_allclose(
+        np.asarray(record["p2"], dtype=np.float64), frame[2], atol=1e-5, err_msg=piece_id
+    )
+    np.testing.assert_allclose(
+        np.asarray(record["p3"], dtype=np.float64), frame[3], atol=1e-5, err_msg=piece_id
+    )
+
+    # 3) The base really is the longest side, in both frames (the payload
+    #    rounds corners to 3 decimals, hence the 1e-2 tolerances).
+    frame_edges = _ordered_edge_lengths(frame)
+    corner_edges = _ordered_edge_lengths(corners)
+    test_case.assertAlmostEqual(
+        max(frame_edges), frame_edges[0], places=9, msg=f"{piece_id}: base not longest"
+    )
+    test_case.assertAlmostEqual(
+        frame_edges[0], base_length, places=6, msg=piece_id
+    )
+    test_case.assertAlmostEqual(
+        max(corner_edges), base_length, delta=1e-2, msg=f"{piece_id}: base not longest"
+    )
+    np.testing.assert_allclose(
+        sorted(frame_edges), sorted(corner_edges), atol=1e-2, err_msg=piece_id
+    )
+    test_case.assertAlmostEqual(
+        polygon_area(frame),
+        float(piece["area_px"]),
+        delta=0.01 * float(piece["area_px"]),
+        msg=f"{piece_id}: area changed by the frame",
+    )
+
+    # 4) Both matrices are rigid unit-scale rotations.
+    matrix = np.asarray(piece["rectified_to_piece_matrix"], dtype=np.float64)
+    base_matrix = np.asarray(piece["rectified_to_base_edge_matrix"], dtype=np.float64)
+    for name, candidate in (
+        ("rectified_to_piece_matrix", matrix),
+        ("rectified_to_base_edge_matrix", base_matrix),
+    ):
+        test_case.assertEqual(candidate.shape, (3, 3), msg=f"{piece_id} {name}")
+        np.testing.assert_allclose(
+            candidate[2], [0.0, 0.0, 1.0], atol=1e-9, err_msg=f"{piece_id} {name}"
+        )
+        linear = candidate[:2, :2]
+        np.testing.assert_allclose(
+            linear @ linear.T, np.eye(2), atol=1e-6, err_msg=f"{piece_id} {name}"
+        )
+        test_case.assertAlmostEqual(
+            float(np.linalg.det(linear)), 1.0, places=6, msg=f"{piece_id} {name}"
+        )
+
+    # ``corners_px`` starts at the original polygon vertex 0 while the frame
+    # starts at the base edge: roll by ``base_side_index`` before comparing.
+    mapped = np.roll(_apply_transform(base_matrix, corners), -base_index, axis=0)
+    np.testing.assert_allclose(mapped, frame, atol=5e-3, err_msg=piece_id)
+    # The inverse transform must return the original polygon vertices (the
+    # payload's ``corners_px`` keeps the fitted vertex order, which is a
+    # permutation of the ordered frame vertices, so match as a point set).
+    inverse = np.linalg.inv(base_matrix)
+    back = _apply_transform(inverse, frame)
+    for point in back:
+        test_case.assertLess(
+            float(np.linalg.norm(corners - point, axis=1).min()),
+            5e-3,
+            msg=f"{piece_id}: inverse frame does not return a corner",
+        )
+
+    # 5) Crop = frame bbox + 2 * margin, 1:1 scale, base horizontal in crop.
+    margin = float(margin_px)
+    width, height = (int(value) for value in piece["piece_size_px"])
+    test_case.assertGreaterEqual(width, 2, msg=piece_id)
+    test_case.assertGreaterEqual(height, 2, msg=piece_id)
+    extent = frame.max(axis=0) - frame.min(axis=0)
+    test_case.assertLessEqual(
+        abs(width - math.ceil(float(extent[0]) + 2.0 * margin)), 1, msg=piece_id
+    )
+    test_case.assertLessEqual(
+        abs(height - math.ceil(float(extent[1]) + 2.0 * margin)), 1, msg=piece_id
+    )
+    image_corners = np.asarray(piece["image_corners_px"], dtype=np.float64)
+    test_case.assertEqual(image_corners.shape, (4, 2), msg=piece_id)
+    test_case.assertAlmostEqual(
+        float(image_corners[0][1]), float(image_corners[1][1]), places=6,
+        msg=f"{piece_id}: base edge is not horizontal in the crop",
+    )
+    np.testing.assert_allclose(
+        np.roll(_apply_transform(matrix, corners), -base_index, axis=0),
+        image_corners,
+        atol=5e-3,
+        err_msg=piece_id,
+    )
+    offset = image_corners - frame
+    np.testing.assert_allclose(
+        offset, np.repeat(offset[0:1], 4, axis=0), atol=2e-3, err_msg=piece_id
+    )
+    lower = frame.min(axis=0)
+    np.testing.assert_allclose(
+        offset[0], [margin - lower[0], margin - lower[1]], atol=1e-2, err_msg=piece_id
+    )
+    translation_delta = matrix[:2, 2] - base_matrix[:2, 2]
+    np.testing.assert_allclose(
+        translation_delta, offset[0], atol=1e-3, err_msg=piece_id
+    )
+    test_case.assertGreaterEqual(
+        float(image_corners.min()), margin - 1e-3, msg=f"{piece_id}: outside margin"
+    )
+    test_case.assertLessEqual(
+        float(image_corners[:, 0].max()), width - margin + 1e-3, msg=piece_id
+    )
+    test_case.assertLessEqual(
+        float(image_corners[:, 1].max()), height - margin + 1e-3, msg=piece_id
+    )
+
+    # 6) The per-piece minimum side mirrors the quality breakdown.
+    breakdown = piece["quality_breakdown"]
+    test_case.assertIn("min_side_px", breakdown, msg=piece_id)
+    if piece["min_side_px"] is not None:
+        test_case.assertAlmostEqual(
+            float(piece["min_side_px"]),
+            float(breakdown["min_side_px"]),
+            places=5,
+            msg=piece_id,
+        )
+    # 7) The old normalized-canvas fields are gone.
+    for removed in REMOVED_PIECE_FIELDS:
+        test_case.assertNotIn(removed, piece, msg=piece_id)
 
 
 def _assert_manual_review_contract(
@@ -394,50 +592,90 @@ class Stage2HelperTests(unittest.TestCase):
             [[500.0, 0.0]],
         )
 
-    def test_normalization_matrix_maps_corners_inside_margin(self) -> None:
-        size_px, margin_px = 512, 20.0
-        angle = 0.30
+    def test_base_edge_frame_puts_the_longest_side_on_the_x_axis(self) -> None:
+        angle = 0.25
         corners = _rotated_rectangle((700.0, 900.0), 200.0, 125.0, angle)
-        matrix, rotation_deg = normalization_matrix(corners, size_px, margin_px)
+        frame = base_edge_frame(corners)
 
+        self.assertEqual(
+            set(frame),
+            {"matrix", "corners", "base_length", "base_side_index", "rotation_deg", "ordered"},
+        )
+        frame_corners = np.asarray(frame["corners"], dtype=np.float64)
+        self.assertEqual(frame_corners.shape, (4, 2))
+        # The base is the longest side (2 * 200 px), put on the +x axis.
+        self.assertAlmostEqual(frame["base_length"], 400.0, places=6)
+        np.testing.assert_allclose(frame_corners[0], [0.0, 0.0], atol=1e-9)
+        self.assertAlmostEqual(float(frame_corners[1][1]), 0.0, places=9)
+        self.assertAlmostEqual(
+            float(frame_corners[1][0]), frame["base_length"], places=9
+        )
+        # Clockwise in the y-down image frame: P2/P3 below the base edge.
+        self.assertGreater(float(frame_corners[2][1]), 0.0)
+        self.assertGreater(float(frame_corners[3][1]), 0.0)
+        self.assertAlmostEqual(
+            polygon_signed_area(frame_corners), polygon_area(corners), places=6
+        )
+        # The frame keeps the polygon order, starting at the base side.
+        np.testing.assert_allclose(frame["ordered"], ordered_polygon(corners))
+        base_index = int(frame["base_side_index"])
+        # Unit scale: pure rotation + translation.
+        matrix = np.asarray(frame["matrix"], dtype=np.float64)
         self.assertEqual(matrix.shape, (3, 3))
-        np.testing.assert_allclose(matrix[2], [0.0, 0.0, 1.0])
-        transformed = _apply_transform(matrix, corners)
-        usable = size_px - 2.0 * margin_px
-        # All corners stay inside the margin and the longer bbox side fills the
-        # usable box exactly (the shorter side keeps the aspect ratio).
-        self.assertGreaterEqual(float(transformed.min()), margin_px - 1e-9)
-        self.assertLessEqual(float(transformed.max()), size_px - margin_px + 1e-9)
-        extents = np.ptp(transformed, axis=0)
-        self.assertAlmostEqual(float(extents.max()), usable, places=9)
-        self.assertLessEqual(float(extents.min()), float(extents.max()) + 1e-9)
+        np.testing.assert_allclose(matrix[2], [0.0, 0.0, 1.0], atol=1e-12)
+        linear = matrix[:2, :2]
+        np.testing.assert_allclose(linear @ linear.T, np.eye(2), atol=1e-12)
+        self.assertAlmostEqual(float(np.linalg.det(linear)), 1.0, places=12)
+        # 1:1 transform: the frame is the polygon itself, just rotated.
         np.testing.assert_allclose(
-            transformed.min(axis=0) + transformed.max(axis=0),
-            [size_px, size_px],
+            sorted(_ordered_edge_lengths(frame_corners)),
+            sorted(_ordered_edge_lengths(corners)),
             atol=1e-9,
         )
-        # Uniform scale: the linear part is s * R with R a rotation.
-        linear = matrix[:2, :2]
-        np.testing.assert_allclose(linear.T @ linear, np.eye(2) * float(np.linalg.det(linear)), atol=1e-9)
-        self.assertGreater(float(np.linalg.det(linear)), 0.0)
-        self.assertGreaterEqual(rotation_deg, -180.0)
-        self.assertLessEqual(rotation_deg, 180.0)
-        self.assertAlmostEqual(rotation_deg, -math.degrees(angle), places=6)
-        # Principal axis of the normalized shape is horizontal.
-        centred = transformed - transformed.mean(axis=0)
-        eigenvalues, eigenvectors = np.linalg.eigh(centred.T @ centred)
-        axis = eigenvectors[:, int(np.argmax(eigenvalues))]
-        if axis[0] < 0:
-            axis = -axis
-        self.assertAlmostEqual(float(axis[1]), 0.0, places=6)
+        mapped = np.roll(_apply_transform(matrix, frame["ordered"]), -base_index, axis=0)
+        np.testing.assert_allclose(mapped, frame_corners, atol=1e-9)
+        # ``rotation_deg`` describes the matrix as a y-down rotation.
+        theta = math.radians(frame["rotation_deg"])
+        np.testing.assert_allclose(
+            linear,
+            [[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]],
+            atol=1e-12,
+        )
+        self.assertGreaterEqual(frame["rotation_deg"], -180.0)
+        self.assertLessEqual(frame["rotation_deg"], 180.0)
+        self.assertAlmostEqual(
+            abs(frame["rotation_deg"]), math.degrees(angle), places=6
+        )
 
-    def test_normalization_matrix_rejects_degenerate_polygon(self) -> None:
-        degenerate = np.full((4, 2), 5.0)
-        with self.assertRaises(ValueError):
-            normalization_matrix(degenerate, 512, 20.0)
+    def test_base_edge_frame_rejects_degenerate_polygons(self) -> None:
+        with self.assertRaisesRegex(ValueError, "longest edge has zero length"):
+            base_edge_frame(np.full((4, 2), 5.0))
+        # All-collinear vertices: every "edge" has zero area, so the result
+        # cannot be expressed as a clockwise quad.
+        with self.assertRaisesRegex(ValueError, "clockwise base-edge quad"):
+            base_edge_frame(
+                np.array([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0], [30.0, 0.0]])
+            )
 
-    def test_normalize_piece_produces_consistent_rgba(self) -> None:
-        size_px, margin_px = 128, 10.0
+    def test_base_edge_record_is_minimal_and_full_precision(self) -> None:
+        corners = np.array(
+            [[0.0, 0.0], [400.0, 0.0], [400.25, 250.5], [0.125, 250.0]],
+            dtype=np.float64,
+        )
+        record = base_edge_record("S07", corners, 400.0)
+        self.assertEqual(set(record), BASE_EDGE_RECORD_FIELDS)
+        self.assertEqual(record["id"], "S07")
+        self.assertIsInstance(record["baseLength"], float)
+        self.assertEqual(record["baseLength"], 400.0)
+        # P2/P3 are copied at full float precision, not scaled or re-ordered.
+        self.assertEqual(record["p2"], [400.25, 250.5])
+        self.assertEqual(record["p3"], [0.125, 250.0])
+        for value in (*record["p2"], *record["p3"]):
+            self.assertIsInstance(value, float)
+
+
+    def test_normalize_piece_crops_1to1_in_base_edge_frame(self) -> None:
+        margin_px = 10.0
         image = np.full((300, 320, 3), 20, dtype=np.uint8)
         polygon = _rotated_rectangle((160.0, 150.0), 80.0, 50.0, 0.25)
         cv2.fillPoly(
@@ -445,38 +683,112 @@ class Stage2HelperTests(unittest.TestCase):
             [np.round(polygon).astype(np.int32)],
             (230, 240, 250),
         )
-        normalized = normalize_piece(image, polygon, size_px, margin_px)
+        normalized = normalize_piece(image, polygon, margin_px)
+
+        self.assertEqual(
+            set(normalized),
+            {
+                "matrix",
+                "base_edge_matrix",
+                "base_edge_corners",
+                "image_corners",
+                "base_length",
+                "base_side_index",
+                "rotation_deg",
+                "size",
+                "rgba",
+                "mask",
+            },
+        )
+        width, height = (int(value) for value in normalized["size"])
+        frame = np.asarray(normalized["base_edge_corners"], dtype=np.float64)
+        image_corners = np.asarray(normalized["image_corners"], dtype=np.float64)
+        extent = frame.max(axis=0) - frame.min(axis=0)
+        self.assertEqual(width, math.ceil(float(extent[0]) + 2.0 * margin_px))
+        self.assertEqual(height, math.ceil(float(extent[1]) + 2.0 * margin_px))
+        self.assertEqual(width, 180)
+        self.assertEqual(height, 120)
+        self.assertAlmostEqual(float(normalized["base_length"]), 160.0, places=6)
+
+        # 1:1 crop: lengths are preserved exactly (no per-piece rescaling).
+        np.testing.assert_allclose(
+            sorted(_ordered_edge_lengths(image_corners)),
+            sorted(_ordered_edge_lengths(polygon)),
+            atol=1e-6,
+        )
+        self.assertAlmostEqual(
+            polygon_area(image_corners), polygon_area(polygon), places=6
+        )
+        # Canonical base-edge frame: base along +x on top, P2/P3 below.
+        np.testing.assert_allclose(frame[0], [0.0, 0.0], atol=1e-9)
+        self.assertAlmostEqual(float(frame[1][1]), 0.0, places=9)
+        self.assertAlmostEqual(float(frame[1][0]), 160.0, places=6)
+        self.assertGreater(float(frame[2][1]), 0.0)
+        self.assertGreater(float(frame[3][1]), 0.0)
+        self.assertGreater(float(polygon_signed_area(frame)), 0.0)
+        # The crop corners are the frame translated by the margin.
+        lower = frame.min(axis=0)
+        offset = image_corners - frame
+        np.testing.assert_allclose(offset, np.repeat(offset[0:1], 4, axis=0), atol=1e-9)
+        np.testing.assert_allclose(
+            offset[0], [margin_px - lower[0], margin_px - lower[1]], atol=1e-9
+        )
+        # ``matrix`` maps rectified corners to crop pixels; the base is horizontal.
+        base_index = int(normalized["base_side_index"])
+        np.testing.assert_allclose(
+            np.roll(_apply_transform(normalized["matrix"], polygon), -base_index, axis=0),
+            image_corners,
+            atol=1e-6,
+        )
+        translation = (
+            np.asarray(normalized["matrix"], dtype=np.float64)[:2, 2]
+            - np.asarray(normalized["base_edge_matrix"], dtype=np.float64)[:2, 2]
+        )
+        np.testing.assert_allclose(translation, offset[0], atol=1e-9)
+        self.assertAlmostEqual(
+            float(normalized["rotation_deg"]), -math.degrees(0.25), places=6
+        )
 
         rgba = normalized["rgba"]
         mask = normalized["mask"]
-        self.assertEqual(rgba.shape, (size_px, size_px, 4))
-        self.assertEqual(mask.shape, (size_px, size_px))
+        self.assertEqual(rgba.shape, (height, width, 4))
+        self.assertEqual(mask.shape, (height, width))
         self.assertEqual(rgba.dtype, np.uint8)
+        self.assertEqual(mask.dtype, np.uint8)
         self.assertLessEqual(set(np.unique(mask)), {0, 255})
         np.testing.assert_array_equal(rgba[..., 3], mask)
         self.assertTrue(bool(np.all(rgba[mask == 0] == 0)))
-
-        normalized_corners = np.asarray(normalized["normalized_corners"])
-        transformed = _apply_transform(normalized["matrix"], polygon)
-        np.testing.assert_allclose(normalized_corners, transformed, atol=1e-9)
-        self.assertGreaterEqual(float(transformed.min()), margin_px - 1e-9)
-        self.assertLessEqual(float(transformed.max()), size_px - margin_px + 1e-9)
-        np.testing.assert_allclose(
-            (transformed.min(axis=0) + transformed.max(axis=0)) / 2.0,
-            [size_px / 2.0, size_px / 2.0],
-            atol=1e-9,
-        )
         # The warped brightness inside the mask matches the drawn paper.
         self.assertGreater(float(np.median(rgba[mask > 0][:, 0])), 180.0)
         # The analytic polygon and its rasterized alpha describe the same area.
-        analytic = polygon_area(transformed)
+        analytic = polygon_area(image_corners)
         mask_area = float((mask > 0).sum())
         self.assertLessEqual(
             abs(mask_area - analytic),
-            0.01 * analytic + 0.5 * _perimeter(transformed),
+            0.01 * analytic + 0.5 * _perimeter(image_corners),
             msg=f"mask area {mask_area} vs analytic {analytic}",
         )
-        self.assertAlmostEqual(float(normalized["rotation_deg"]), -math.degrees(0.25), places=6)
+
+    def test_render_debug_supports_non_square_crops(self) -> None:
+        width, height = 140, 60
+        rgba = np.zeros((height, width, 4), dtype=np.uint8)
+        rgba[..., :3] = 200
+        rgba[..., 3] = 255
+        corners = np.array(
+            [[10.0, 10.0], [120.0, 10.0], [120.0, 50.0], [10.0, 50.0]],
+            dtype=np.float64,
+        )
+        debug = render_debug(rgba, corners, "S01", 0.91)
+        self.assertEqual(debug.shape, (height, width, 3))
+        self.assertEqual(debug.dtype, np.uint8)
+        # The base edge P0 -> P1 is highlighted in orange, BGR (0, 165, 255).
+        base_band = debug[7:14, 40:100]
+        self.assertGreater(int(base_band[..., 2].max()), 200)
+        self.assertGreater(int(base_band[..., 1].max()), 120)
+        # The background outside the piece is the checkerboard, not uniform white.
+        self.assertGreater(
+            int(np.unique(debug[55:58, 0:140].reshape(-1, 3), axis=0).shape[0]), 1
+        )
 
     def test_combine_quality_weighted_score(self) -> None:
         quality = {"fit": 0.8, "shape": 0.6, "support": 0.4, "vertices": 1.0, "convex": 1.0}
@@ -564,7 +876,11 @@ class Stage2HelperTests(unittest.TestCase):
             merged = _resolve_config(config_path)
             self.assertEqual(merged["expected_piece_count"], 7)
             self.assertEqual(merged["min_quality"], 0.5)
-            self.assertEqual(merged["piece_output_size_px"], 512)
+            # v1.4.0 dropped the normalized-canvas output size; the crop is 1:1
+            # and its padding is ``piece_margin_px`` instead.
+            self.assertNotIn("piece_output_size_px", merged)
+            self.assertNotIn("piece_output_size_px", DEFAULT_CONFIG_VALUES)
+            self.assertEqual(merged["piece_margin_px"], 20.0)
             # Existing defaults are not mutated by the merge.
             self.assertEqual(DEFAULT_CONFIG_VALUES["expected_piece_count"], 16)
 
@@ -578,6 +894,8 @@ class Stage2HelperTests(unittest.TestCase):
         self.assertEqual(resolved["expected_piece_count"], 16)
         self.assertEqual(resolved["threshold_max"], 25.0)
         self.assertEqual(resolved["ignore_border_mm"], 5.0)
+        self.assertNotIn("piece_output_size_px", resolved)
+        self.assertEqual(resolved["piece_margin_px"], 20.0)
 
     def test_scan_order_indices_groups_rows_then_orders_by_x(self) -> None:
         """Scan order clusters rows by y (2 px tolerance), then sorts each row by x."""
@@ -711,7 +1029,6 @@ def _synthetic_config() -> dict:
     config.update(
         {
             "expected_piece_count": 16,
-            "piece_output_size_px": 256,
             "ignore_border_mm": SYNTH_IGNORE_BORDER_MM,
             "edge_profile_px": SYNTH_EDGE_PROFILE_PX,
         }
@@ -768,7 +1085,10 @@ class SyntheticExtractionTests(unittest.TestCase):
         self.assertEqual(payload["expected_piece_count"], 16)
         self.assertEqual(len(payload["pieces"]), 16)
         self.assertEqual(payload["canvas_px"], [SYNTH_CANVAS_W, SYNTH_CANVAS_H])
-        self.assertEqual(payload["piece_size_px"], [256, 256])
+        self.assertAlmostEqual(float(payload["piece_scale"]), 1.0)
+        self.assertNotIn("piece_size_px", payload)
+        self.assertIsInstance(payload["piece_frame"], str)
+        self.assertIn("base_edge", payload["piece_frame"])
         self.assertEqual(payload["piece_margin_px"], DEFAULT_CONFIG_VALUES["piece_margin_px"])
         self.assertAlmostEqual(payload["px_per_mm"][0], SYNTH_PX_PER_MM)
         _assert_manual_review_contract(self, payload, self.config)
@@ -793,7 +1113,7 @@ class SyntheticExtractionTests(unittest.TestCase):
                     delta_y, SCAN_ROW_TOLERANCE_PX, msg="rows must ascend in y"
                 )
 
-        expected_files = {"pieces.json"}
+        expected_files = {"pieces.json", "pieces_base_edge.json"}
         for index in range(1, 17):
             for suffix in ("rgba", "mask", "debug"):
                 expected_files.add(f"pieces/S{index:02d}_{suffix}.png")
@@ -849,22 +1169,25 @@ class SyntheticExtractionTests(unittest.TestCase):
             self.assertTrue(debug_path.is_file(), msg=piece_id)
             rgba = imread(rgba_path, cv2.IMREAD_UNCHANGED)
             mask = imread(mask_path, cv2.IMREAD_UNCHANGED)
-            self.assertEqual(rgba.shape, (256, 256, 4), msg=piece_id)
-            self.assertEqual(mask.shape, (256, 256), msg=piece_id)
+            debug = imread(debug_path, cv2.IMREAD_UNCHANGED)
+            width, height = (int(value) for value in piece["piece_size_px"])
+            self.assertEqual(rgba.shape, (height, width, 4), msg=piece_id)
+            self.assertEqual(mask.shape, (height, width), msg=piece_id)
+            self.assertEqual(debug.shape, (height, width, 3), msg=piece_id)
             np.testing.assert_array_equal(rgba[..., 3], mask)
             self.assertLessEqual(set(np.unique(mask)), {0, 255})
             self.assertGreater(int((mask > 0).sum()), 0)
-
-            matrix = np.asarray(piece["rectified_to_piece_matrix"], dtype=np.float64)
-            self.assertEqual(matrix.shape, (3, 3))
-            np.testing.assert_allclose(matrix[2], [0.0, 0.0, 1.0], atol=1e-9)
-            normalized = np.asarray(piece["normalized_corners_px"], dtype=np.float64)
-            mapped = _apply_transform(matrix, corners)
-            np.testing.assert_allclose(mapped, normalized, atol=5e-3)
-            margin = float(self.payload["piece_margin_px"])
-            size = float(self.payload["piece_size_px"][0])
-            self.assertGreaterEqual(float(normalized.min()), margin - 1e-3, msg=piece_id)
-            self.assertLessEqual(float(normalized.max()), size - margin + 1e-3, msg=piece_id)
+            # 1.4.0: the crop is the piece's own base-edge frame at 1:1 scale.
+            _assert_base_edge_piece_contract(
+                self, piece, float(self.payload["piece_margin_px"])
+            )
+            # The alpha mask and the rasterized crop polygon describe the same
+            # region (cv2.fillPoly quantisation is sub-pixel, so IoU ~1).
+            image_corners = np.asarray(piece["image_corners_px"], dtype=np.float64)
+            expected_mask = rasterize_polygon(image_corners, (height, width))
+            intersection = int(np.count_nonzero((mask > 0) & (expected_mask > 0)))
+            union = int(np.count_nonzero((mask > 0) | (expected_mask > 0)))
+            self.assertGreater(intersection / max(union, 1), 0.995, msg=piece_id)
 
         summary = self.payload["summary"]
         self.assertGreaterEqual(summary["min_quality"], float(self.config["min_quality"]))
@@ -875,6 +1198,66 @@ class SyntheticExtractionTests(unittest.TestCase):
             sum(float(piece["area_px"]) for piece in pieces),
             places=1,
         )
+
+    def test_base_edge_handoff_file_is_minimal_and_exact(self) -> None:
+        handoff = json.loads(
+            (self.first_output / "pieces_base_edge.json").read_text(encoding="utf-8")
+        )
+        payload = self.payload
+        self.assertEqual(
+            set(handoff),
+            {
+                "schema_version",
+                "algorithm_version",
+                "session_id",
+                "coordinate_system",
+                "unit_scale",
+                "px_per_mm",
+                "base_edge",
+                "piece_count",
+                "pieces",
+            },
+        )
+        self.assertEqual(handoff["algorithm_version"], payload["algorithm_version"])
+        self.assertEqual(handoff["session_id"], payload["session_id"])
+        self.assertEqual(handoff["coordinate_system"], "rectified_px")
+        self.assertAlmostEqual(float(handoff["unit_scale"]), 1.0)
+        self.assertIsInstance(handoff["base_edge"], str)
+        self.assertIn("baseLength", handoff["base_edge"])
+        self.assertEqual(handoff["piece_count"], 16)
+        self.assertEqual(len(handoff["pieces"]), 16)
+
+        pieces = payload["pieces"]
+        self.assertEqual(
+            [record["id"] for record in handoff["pieces"]],
+            [piece["piece_id"] for piece in pieces],
+        )
+        for record, piece in zip(handoff["pieces"], pieces):
+            piece_id = piece["piece_id"]
+            self.assertEqual(set(record), BASE_EDGE_RECORD_FIELDS, msg=piece_id)
+            # The minimal hand-off carries the per-piece base-edge record
+            # verbatim, at full float precision (pieces.json also round-trips it).
+            self.assertEqual(record, piece["base_edge"], msg=piece_id)
+            self.assertAlmostEqual(
+                float(record["baseLength"]),
+                float(piece["base_length_px"]),
+                places=6,
+                msg=piece_id,
+            )
+            np.testing.assert_allclose(
+                np.asarray(record["p2"], dtype=np.float64),
+                np.asarray(piece["base_edge_corners_px"], dtype=np.float64)[2],
+                atol=1e-5,
+                err_msg=piece_id,
+            )
+            np.testing.assert_allclose(
+                np.asarray(record["p3"], dtype=np.float64),
+                np.asarray(piece["base_edge_corners_px"], dtype=np.float64)[3],
+                atol=1e-5,
+                err_msg=piece_id,
+            )
+            for value in (*record["p2"], *record["p3"]):
+                self.assertIsInstance(value, float, msg=piece_id)
 
     def test_detected_corners_match_placed_quads(self) -> None:
         placed = [ordered_polygon(quad) for quad in self.placed_quads]
@@ -903,6 +1286,9 @@ class SyntheticExtractionTests(unittest.TestCase):
         first_json = (self.first_output / "pieces.json").read_bytes()
         second_json = (self.second_output / "pieces.json").read_bytes()
         self.assertEqual(first_json, second_json)
+        first_handoff = (self.first_output / "pieces_base_edge.json").read_bytes()
+        second_handoff = (self.second_output / "pieces_base_edge.json").read_bytes()
+        self.assertEqual(first_handoff, second_handoff)
         first_files = {
             path.relative_to(self.first_output).as_posix()
             for path in self.first_output.rglob("*")
@@ -914,7 +1300,8 @@ class SyntheticExtractionTests(unittest.TestCase):
             if path.is_file()
         }
         self.assertEqual(first_files, second_files)
-        self.assertEqual(len(first_files), 49)
+        # pieces.json + pieces_base_edge.json + 16 * (rgba, mask, debug)
+        self.assertEqual(len(first_files), 50)
 
 
 # ---------------------------------------------------------------------------
@@ -944,9 +1331,16 @@ def _real_fingerprint(payload: dict) -> str:
         "quality",
         "quality_breakdown",
         "needs_manual_review",
-        "normalized_corners_px",
+        "manual_review_reasons",
+        "base_edge",
+        "base_edge_corners_px",
+        "base_length_px",
+        "base_side_index",
+        "image_corners_px",
+        "piece_size_px",
         "rotation_deg",
         "rectified_to_piece_matrix",
+        "rectified_to_base_edge_matrix",
     )
     return json.dumps(
         {
@@ -970,28 +1364,34 @@ class RealDataIntegrationTests(unittest.TestCase):
         config = _resolve_config(EXAMPLE_CONFIG)
         layout_path = REAL_LAYOUT if REAL_LAYOUT.exists() else None
 
-        def run_into(output_dir: str) -> dict:
+        def run_into(output_dir: Path, write_outputs: bool) -> dict:
             return extract_pieces(
                 REAL_PIECES,
                 REAL_EMPTY,
                 REAL_RECTIFICATION,
                 layout_path,
                 config,
-                Path(output_dir),
-                write_outputs=False,
+                output_dir,
+                write_outputs=write_outputs,
             )
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            payload = run_into(temp_dir)
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        output_dir = Path(temp_dir.name)
+        # ``write_outputs=True`` exercises the on-disk artifacts (1:1 crops and
+        # the minimal base-edge hand-off) against the real capture.
+        payload = run_into(output_dir, write_outputs=True)
         # A second run must reproduce the same session id and geometry.  (The
         # synthetic test additionally pins the byte-for-byte determinism of the
         # written pieces.json / piece images.)
-        with tempfile.TemporaryDirectory() as second_dir:
-            payload_again = run_into(second_dir)
+        payload_again = run_into(output_dir / "again", write_outputs=False)
         self.assertEqual(_real_fingerprint(payload), _real_fingerprint(payload_again))
 
         expected_count = int(config["expected_piece_count"])
-        output_size = int(config["piece_output_size_px"])
+        self.assertAlmostEqual(float(payload["piece_scale"]), 1.0)
+        self.assertNotIn("piece_size_px", payload)
+        self.assertIsInstance(payload["piece_frame"], str)
+        margin = float(payload["piece_margin_px"])
         self.assertEqual(payload["detected_piece_count"], expected_count)
         self.assertEqual(payload["expected_piece_count"], expected_count)
         self.assertEqual(len(payload["pieces"]), expected_count)
@@ -999,7 +1399,10 @@ class RealDataIntegrationTests(unittest.TestCase):
         self.assertEqual(
             payload["canvas_px"], [int(value) for value in rectification["canvas_px"]]
         )
-        self.assertEqual(payload["piece_size_px"], [output_size, output_size])
+        self.assertEqual(
+            payload["px_per_mm"],
+            [float(value) for value in rectification["px_per_mm"]],
+        )
         # 1.1.0 contract: manual review is an advisory triage flag, so assert
         # completeness / explainability / payload consistency instead of
         # hard-coding the flagged ids of the current capture.
@@ -1026,34 +1429,64 @@ class RealDataIntegrationTests(unittest.TestCase):
             self.assertGreaterEqual(float(piece["quality"]), 0.0)
             self.assertLessEqual(float(piece["quality"]), 1.0)
 
-            rgba = np.asarray(piece["rgba"])
-            mask = np.asarray(piece["mask"])
-            self.assertEqual(rgba.shape, (output_size, output_size, 4), msg=piece_id)
-            self.assertEqual(mask.shape, (output_size, output_size), msg=piece_id)
+            rgba_path = output_dir / piece["rgba_path"]
+            mask_path = output_dir / piece["mask_path"]
+            debug_path = output_dir / piece["debug_path"]
+            self.assertTrue(rgba_path.is_file(), msg=piece_id)
+            self.assertTrue(mask_path.is_file(), msg=piece_id)
+            self.assertTrue(debug_path.is_file(), msg=piece_id)
+            rgba = imread(rgba_path, cv2.IMREAD_UNCHANGED)
+            mask = imread(mask_path, cv2.IMREAD_UNCHANGED)
+            debug = imread(debug_path, cv2.IMREAD_UNCHANGED)
+            width, height = (int(value) for value in piece["piece_size_px"])
+            self.assertEqual(rgba.shape, (height, width, 4), msg=piece_id)
+            self.assertEqual(mask.shape, (height, width), msg=piece_id)
+            self.assertEqual(debug.shape, (height, width, 3), msg=piece_id)
             np.testing.assert_array_equal(rgba[..., 3], mask)
             self.assertLessEqual(set(np.unique(mask)), {0, 255})
+            self.assertGreater(int((mask > 0).sum()), 0)
 
-            matrix = np.asarray(piece["rectified_to_piece_matrix"], dtype=np.float64)
-            normalized = np.asarray(piece["normalized_corners_px"], dtype=np.float64)
-            np.testing.assert_allclose(
-                _apply_transform(matrix, corners), normalized, atol=5e-3
-            )
-            margin = float(payload["piece_margin_px"])
-            size = float(payload["piece_size_px"][0])
-            self.assertGreaterEqual(float(normalized.min()), margin - 1e-3, msg=piece_id)
-            self.assertLessEqual(float(normalized.max()), size - margin + 1e-3, msg=piece_id)
+            # 1.4.0: the piece is cropped in its own base-edge frame at 1:1.
+            _assert_base_edge_piece_contract(self, piece, margin)
 
-            # The alpha mask and the polygon must describe the same area.  The
-            # allowance covers cv2.fillPoly pixel quantisation, which is bounded
-            # by roughly half a pixel per perimeter pixel.
-            warped = _apply_transform(matrix, corners)
-            analytic = polygon_area(warped)
+            # The alpha mask and the rasterized crop polygon agree.  Because the
+            # crop is 1:1, the polygon area and the mask area differ only by
+            # cv2.fillPoly quantisation (bounded by roughly half a pixel per
+            # perimeter pixel).
+            image_corners = np.asarray(piece["image_corners_px"], dtype=np.float64)
+            expected_mask = rasterize_polygon(image_corners, (height, width))
+            intersection = int(np.count_nonzero((mask > 0) & (expected_mask > 0)))
+            union = int(np.count_nonzero((mask > 0) | (expected_mask > 0)))
+            self.assertGreater(intersection / max(union, 1), 0.995, msg=piece_id)
+            analytic = polygon_area(image_corners)
             mask_area = float((mask > 0).sum())
-            allowance = 0.01 * analytic + 0.5 * _perimeter(warped) + 1e-6
+            allowance = 0.01 * analytic + 0.5 * _perimeter(image_corners) + 1e-6
             self.assertLessEqual(
                 abs(mask_area - analytic),
                 allowance,
                 msg=f"{piece_id}: mask {mask_area:.1f} vs polygon {analytic:.1f}px",
+            )
+
+        # The minimal hand-off file is written next to pieces.json and carries
+        # the same base-edge records at full float precision.
+        handoff = json.loads(
+            (output_dir / "pieces_base_edge.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(handoff["piece_count"], expected_count)
+        self.assertEqual(handoff["session_id"], payload["session_id"])
+        self.assertEqual(handoff["coordinate_system"], "rectified_px")
+        self.assertEqual(
+            [record["id"] for record in handoff["pieces"]],
+            [piece["piece_id"] for piece in payload["pieces"]],
+        )
+        for record, piece in zip(handoff["pieces"], payload["pieces"]):
+            self.assertEqual(set(record), BASE_EDGE_RECORD_FIELDS)
+            self.assertEqual(record, piece["base_edge"], msg=piece["piece_id"])
+            self.assertAlmostEqual(
+                float(record["baseLength"]),
+                float(piece["base_length_px"]),
+                places=6,
+                msg=piece["piece_id"],
             )
 
         summary = payload["summary"]
