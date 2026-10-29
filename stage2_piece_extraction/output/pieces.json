@@ -1,0 +1,1517 @@
+{
+  "schema_version": "1.0",
+  "algorithm_version": "stage2-extract-1.2.1",
+  "session_id": "5997b222129c5112",
+  "coordinate_system": "rectified_px",
+  "piece_size_px": [
+    512,
+    512
+  ],
+  "piece_margin_px": 20.0,
+  "canvas_px": [
+    2640,
+    2640
+  ],
+  "px_per_mm": [
+    8.0,
+    8.0
+  ],
+  "corner_order": "positive shoelace area in y-down pixel coordinates; first corner is top-most then left-most",
+  "expected_piece_count": 16,
+  "detected_piece_count": 16,
+  "inputs": {
+    "pieces_rectified": "stage1_capture_calibration/output/rectified/pieces_rectified.png",
+    "empty_rectified": "stage1_capture_calibration/output/rectified/empty_rectified.png",
+    "rectification": "stage1_capture_calibration/output/rectified/rectification.json",
+    "layout": "stage1_capture_calibration/output/cut_pdf/jigsaw_layout.json"
+  },
+  "segmentation": {
+    "threshold": 25.0,
+    "threshold_mode": "otsu",
+    "ignore_border_px": 40,
+    "foreground_fraction": 0.337304,
+    "discarded_candidates": []
+  },
+  "summary": {
+    "min_quality": 0.889422,
+    "median_quality": 0.924812,
+    "min_area_px": 114133.739,
+    "max_area_px": 165123.926,
+    "total_area_px": 2313709.683
+  },
+  "config": {
+    "schema_version": "1.0",
+    "expected_piece_count": 16,
+    "ignore_border_mm": 5.0,
+    "min_piece_area_px": 2000,
+    "min_quality": 0.85,
+    "piece_output_size_px": 512,
+    "piece_margin_px": 20.0,
+    "blur_ksize": 5,
+    "threshold_mode": "otsu",
+    "threshold_min": 12.0,
+    "threshold_max": 25.0,
+    "open_ksize": 7,
+    "close_ksize": 7,
+    "approx_epsilon_ratio": 0.02,
+    "min_vertices": 3,
+    "max_vertices": 6,
+    "edge_sample_count": 25,
+    "edge_profile_px": 6.0,
+    "edge_profile_step_px": 0.5,
+    "edge_fit_residual_px": 2.0,
+    "min_edge_contrast": 20.0,
+    "edge_localizer": "gradient_max",
+    "min_edge_gradient": 2.0,
+    "max_side_shift_px": 3.0,
+    "max_corner_shift_px": 8.0,
+    "fail_on_manual_review": false
+  },
+  "manual_review": [
+    "S06"
+  ],
+  "pieces": [
+    {
+      "piece_id": "S01",
+      "rgba_path": "pieces/S01_rgba.png",
+      "mask_path": "pieces/S01_mask.png",
+      "debug_path": "pieces/S01_debug.png",
+      "corners_px": [
+        [
+          1414.799,
+          164.88
+        ],
+        [
+          1961.23,
+          295.35
+        ],
+        [
+          1916.06,
+          535.485
+        ],
+        [
+          1381.405,
+          430.865
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        1664.456,
+        355.177
+      ],
+      "area_px": 141407.604,
+      "area_mm2": 2209.494,
+      "bbox_px": [
+        1381,
+        164,
+        1962,
+        536
+      ],
+      "perimeter_px": 1619.007,
+      "quality": 0.916661,
+      "quality_breakdown": {
+        "fit": 0.772373,
+        "support": 1.0,
+        "shape": 0.985322,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.774862,
+        "agreement_shift_px": 0.569806,
+        "edge_support": 0.99,
+        "mask_iou": 0.985322,
+        "min_side_px": 244.347023
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          20.0,
+          146.163
+        ],
+        [
+          482.957,
+          147.795
+        ],
+        [
+          492.0,
+          348.953
+        ],
+        [
+          43.364,
+          365.837
+        ]
+      ],
+      "normalized_short_side_px": 201.361,
+      "rotation_deg": -13.226872,
+      "rectified_to_piece_matrix": [
+        [
+          0.80221622,
+          0.1885551,
+          -1146.06325543
+        ],
+        [
+          -0.1885551,
+          0.80221622,
+          280.66108352
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S02",
+      "rgba_path": "pieces/S02_rgba.png",
+      "mask_path": "pieces/S02_mask.png",
+      "debug_path": "pieces/S02_debug.png",
+      "corners_px": [
+        [
+          826.733,
+          376.995
+        ],
+        [
+          1232.29,
+          471.563
+        ],
+        [
+          1277.144,
+          797.331
+        ],
+        [
+          760.904,
+          760.743
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        1016.113,
+        607.487
+      ],
+      "area_px": 164195.063,
+      "area_mm2": 2565.548,
+      "bbox_px": [
+        760,
+        376,
+        1278,
+        798
+      ],
+      "perimeter_px": 1652.166,
+      "quality": 0.90784,
+      "quality_breakdown": {
+        "fit": 0.749901,
+        "support": 1.0,
+        "shape": 0.981497,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.863442,
+        "agreement_shift_px": 0.731966,
+        "edge_support": 0.95,
+        "mask_iou": 0.981497,
+        "min_side_px": 328.842106
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          20.0,
+          94.852
+        ],
+        [
+          380.367,
+          81.543
+        ],
+        [
+          492.0,
+          343.51
+        ],
+        [
+          52.356,
+          430.457
+        ]
+      ],
+      "normalized_short_side_px": 284.761,
+      "rotation_deg": -15.240826,
+      "rectified_to_piece_matrix": [
+        [
+          0.83549438,
+          0.22763819,
+          -756.54956536
+        ],
+        [
+          -0.22763819,
+          0.83549438,
+          -31.92873638
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S03",
+      "rgba_path": "pieces/S03_rgba.png",
+      "mask_path": "pieces/S03_mask.png",
+      "debug_path": "pieces/S03_debug.png",
+      "corners_px": [
+        [
+          1393.515,
+          499.448
+        ],
+        [
+          1900.276,
+          579.435
+        ],
+        [
+          1919.303,
+          910.707
+        ],
+        [
+          1326.196,
+          758.504
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        1642.731,
+        692.819
+      ],
+      "area_px": 165123.926,
+      "area_mm2": 2580.061,
+      "bbox_px": [
+        1326,
+        499,
+        1920,
+        911
+      ],
+      "perimeter_px": 1724.837,
+      "quality": 0.929963,
+      "quality_breakdown": {
+        "fit": 0.813958,
+        "support": 1.0,
+        "shape": 0.980311,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.617541,
+        "agreement_shift_px": 0.575269,
+        "edge_support": 1.0,
+        "mask_iou": 0.980311,
+        "min_side_px": 267.659553
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          20.0,
+          173.611
+        ],
+        [
+          412.245,
+          132.638
+        ],
+        [
+          492.0,
+          374.924
+        ],
+        [
+          21.315,
+          379.362
+        ]
+      ],
+      "normalized_short_side_px": 205.755,
+      "rotation_deg": -14.933028,
+      "rectified_to_piece_matrix": [
+        [
+          0.74275826,
+          0.19809123,
+          -1113.98113067
+        ],
+        [
+          -0.19809123,
+          0.74275826,
+          78.68539225
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S04",
+      "rgba_path": "pieces/S04_rgba.png",
+      "mask_path": "pieces/S04_mask.png",
+      "debug_path": "pieces/S04_debug.png",
+      "corners_px": [
+        [
+          151.516,
+          567.073
+        ],
+        [
+          675.583,
+          693.128
+        ],
+        [
+          382.009,
+          1080.222
+        ],
+        [
+          153.524,
+          924.668
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        358.948,
+        799.694
+      ],
+      "area_px": 160631.378,
+      "area_mm2": 2509.865,
+      "bbox_px": [
+        151,
+        567,
+        676,
+        1081
+      ],
+      "perimeter_px": 1658.852,
+      "quality": 0.889422,
+      "quality_breakdown": {
+        "fit": 0.700168,
+        "support": 1.0,
+        "shape": 0.977454,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 1.069305,
+        "agreement_shift_px": 0.746624,
+        "edge_support": 0.73,
+        "mask_iou": 0.977454,
+        "min_side_px": 276.410195
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          58.473,
+          23.865
+        ],
+        [
+          492.0,
+          190.447
+        ],
+        [
+          197.706,
+          488.135
+        ],
+        [
+          20.0,
+          329.572
+        ]
+      ],
+      "normalized_short_side_px": 238.163,
+      "rotation_deg": 7.494612,
+      "rectified_to_piece_matrix": [
+        [
+          0.85426709,
+          -0.11238468,
+          -7.23170417
+        ],
+        [
+          0.11238468,
+          0.85426709,
+          -477.59460116
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S05",
+      "rgba_path": "pieces/S05_rgba.png",
+      "mask_path": "pieces/S05_mask.png",
+      "debug_path": "pieces/S05_debug.png",
+      "corners_px": [
+        [
+          612.832,
+          814.745
+        ],
+        [
+          1093.062,
+          1000.787
+        ],
+        [
+          756.143,
+          1366.184
+        ],
+        [
+          560.477,
+          1173.24
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        775.937,
+        1075.06
+      ],
+      "area_px": 159201.141,
+      "area_mm2": 2487.518,
+      "bbox_px": [
+        560,
+        814,
+        1094,
+        1367
+      ],
+      "perimeter_px": 1649.121,
+      "quality": 0.906477,
+      "quality_breakdown": {
+        "fit": 0.749193,
+        "support": 1.0,
+        "shape": 0.977038,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.866278,
+        "agreement_shift_px": 0.815854,
+        "edge_support": 0.93,
+        "mask_iou": 0.977038,
+        "min_side_px": 274.795409
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          235.489,
+          20.37
+        ],
+        [
+          492.0,
+          393.176
+        ],
+        [
+          66.518,
+          491.63
+        ],
+        [
+          20.0,
+          254.695
+        ]
+      ],
+      "normalized_short_side_px": 241.458,
+      "rotation_deg": 34.293495,
+      "rectified_to_piece_matrix": [
+        [
+          0.7259359,
+          -0.49507913,
+          193.97606502
+        ],
+        [
+          0.49507913,
+          0.7259359,
+          -874.48275249
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S06",
+      "rgba_path": "pieces/S06_rgba.png",
+      "mask_path": "pieces/S06_mask.png",
+      "debug_path": "pieces/S06_debug.png",
+      "corners_px": [
+        [
+          1307.991,
+          898.686
+        ],
+        [
+          1826.766,
+          1036.961
+        ],
+        [
+          1810.646,
+          1386.712
+        ],
+        [
+          1276.409,
+          956.744
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        1612.627,
+        1102.229
+      ],
+      "area_px": 114133.739,
+      "area_mm2": 1783.34,
+      "bbox_px": [
+        1276,
+        898,
+        1827,
+        1387
+      ],
+      "perimeter_px": 1638.872,
+      "quality": 0.889828,
+      "quality_breakdown": {
+        "fit": 0.706317,
+        "support": 1.0,
+        "shape": 0.970468,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 1.043073,
+        "agreement_shift_px": 0.168156,
+        "edge_support": 0.67,
+        "mask_iou": 0.970468,
+        "min_side_px": 66.092714
+      },
+      "needs_manual_review": true,
+      "manual_review_reasons": [
+        "short_side"
+      ],
+      "normalized_corners_px": [
+        [
+          20.0,
+          264.105
+        ],
+        [
+          371.624,
+          151.767
+        ],
+        [
+          492.0,
+          360.233
+        ],
+        [
+          23.247,
+          309.431
+        ]
+      ],
+      "normalized_short_side_px": 45.442,
+      "rotation_deg": -32.642545,
+      "rectified_to_piece_matrix": [
+        [
+          0.57894855,
+          0.37085906,
+          -1070.54546155
+        ],
+        [
+          -0.37085906,
+          0.57894855,
+          228.89273873
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S07",
+      "rgba_path": "pieces/S07_rgba.png",
+      "mask_path": "pieces/S07_mask.png",
+      "debug_path": "pieces/S07_debug.png",
+      "corners_px": [
+        [
+          2177.42,
+          826.149
+        ],
+        [
+          2299.279,
+          1346.566
+        ],
+        [
+          1936.635,
+          1381.666
+        ],
+        [
+          1881.382,
+          972.622
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        2081.924,
+        1134.815
+      ],
+      "area_px": 161094.585,
+      "area_mm2": 2517.103,
+      "bbox_px": [
+        1881,
+        826,
+        2300,
+        1382
+      ],
+      "perimeter_px": 1641.884,
+      "quality": 0.934684,
+      "quality_breakdown": {
+        "fit": 0.825969,
+        "support": 1.0,
+        "shape": 0.982379,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.573593,
+        "agreement_shift_px": 0.40557,
+        "edge_support": 1.0,
+        "mask_iou": 0.982379,
+        "min_side_px": 330.292213
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          20.0,
+          144.509
+        ],
+        [
+          492.0,
+          90.984
+        ],
+        [
+          485.329,
+          414.718
+        ],
+        [
+          118.548,
+          421.016
+        ]
+      ],
+      "normalized_short_side_px": 293.544,
+      "rotation_deg": -83.290908,
+      "rectified_to_piece_matrix": [
+        [
+          0.10382992,
+          0.88265315,
+          -935.28437596
+        ],
+        [
+          -0.88265315,
+          0.10382992,
+          1980.63626078
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S08",
+      "rgba_path": "pieces/S08_rgba.png",
+      "mask_path": "pieces/S08_mask.png",
+      "debug_path": "pieces/S08_debug.png",
+      "corners_px": [
+        [
+          1174.961,
+          940.663
+        ],
+        [
+          1603.438,
+          1301.144
+        ],
+        [
+          1424.084,
+          1494.107
+        ],
+        [
+          1024.953,
+          1151.452
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        1308.436,
+        1221.397
+      ],
+      "area_px": 141433.588,
+      "area_mm2": 2209.9,
+      "bbox_px": [
+        1024,
+        940,
+        1604,
+        1495
+      ],
+      "perimeter_px": 1608.146,
+      "quality": 0.935147,
+      "quality_breakdown": {
+        "fit": 0.832237,
+        "support": 1.0,
+        "shape": 0.975455,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.550915,
+        "agreement_shift_px": 0.864435,
+        "edge_support": 1.0,
+        "mask_iou": 0.975455,
+        "min_side_px": 258.716466
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          20.0,
+          149.911
+        ],
+        [
+          492.0,
+          144.907
+        ],
+        [
+          483.378,
+          366.819
+        ],
+        [
+          39.933,
+          367.093
+        ]
+      ],
+      "normalized_short_side_px": 218.095,
+      "rotation_deg": -40.681559,
+      "rectified_to_piece_matrix": [
+        [
+          0.63927408,
+          0.54950457,
+          -1248.02113037
+        ],
+        [
+          -0.54950457,
+          0.63927408,
+          194.21589652
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S09",
+      "rgba_path": "pieces/S09_rgba.png",
+      "mask_path": "pieces/S09_mask.png",
+      "debug_path": "pieces/S09_debug.png",
+      "corners_px": [
+        [
+          996.469,
+          1180.997
+        ],
+        [
+          1390.152,
+          1531.264
+        ],
+        [
+          1225.829,
+          1734.141
+        ],
+        [
+          823.192,
+          1369.454
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        1109.094,
+        1455.005
+      ],
+      "area_px": 138249.047,
+      "area_mm2": 2160.141,
+      "bbox_px": [
+        823,
+        1180,
+        1391,
+        1735
+      ],
+      "perimeter_px": 1587.277,
+      "quality": 0.926471,
+      "quality_breakdown": {
+        "fit": 0.801708,
+        "support": 1.0,
+        "shape": 0.983493,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.663032,
+        "agreement_shift_px": 0.481887,
+        "edge_support": 1.0,
+        "mask_iou": 0.983493,
+        "min_side_px": 256.010046
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          21.278,
+          147.212
+        ],
+        [
+          479.093,
+          142.355
+        ],
+        [
+          492.0,
+          368.827
+        ],
+        [
+          20.0,
+          369.645
+        ]
+      ],
+      "normalized_short_side_px": 222.437,
+      "rotation_deg": -42.267943,
+      "rectified_to_piece_matrix": [
+        [
+          0.64296067,
+          0.58439193,
+          -1309.5777295
+        ],
+        [
+          -0.58439193,
+          0.64296067,
+          -29.79376229
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S10",
+      "rgba_path": "pieces/S10_rgba.png",
+      "mask_path": "pieces/S10_mask.png",
+      "debug_path": "pieces/S10_debug.png",
+      "corners_px": [
+        [
+          583.15,
+          1351.158
+        ],
+        [
+          1036.161,
+          1632.955
+        ],
+        [
+          923.246,
+          1942.038
+        ],
+        [
+          430.966,
+          1528.64
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        753.402,
+        1625.828
+      ],
+      "area_px": 161060.528,
+      "area_mm2": 2516.571,
+      "bbox_px": [
+        430,
+        1351,
+        1037,
+        1943
+      ],
+      "perimeter_px": 1739.199,
+      "quality": 0.935401,
+      "quality_breakdown": {
+        "fit": 0.825514,
+        "support": 1.0,
+        "shape": 0.985885,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.575248,
+        "agreement_shift_px": 0.476788,
+        "edge_support": 0.99,
+        "mask_iou": 0.985885,
+        "min_side_px": 233.794568
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          24.93,
+          189.995
+        ],
+        [
+          413.732,
+          141.686
+        ],
+        [
+          492.0,
+          370.314
+        ],
+        [
+          20.0,
+          361.616
+        ]
+      ],
+      "normalized_short_side_px": 171.692,
+      "rotation_deg": -38.966484,
+      "rectified_to_piece_matrix": [
+        [
+          0.57098407,
+          0.46182102,
+          -932.03276428
+        ],
+        [
+          -0.46182102,
+          0.57098407,
+          -312.18422918
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S11",
+      "rgba_path": "pieces/S11_rgba.png",
+      "mask_path": "pieces/S11_mask.png",
+      "debug_path": "pieces/S11_debug.png",
+      "corners_px": [
+        [
+          2027.235,
+          1411.381
+        ],
+        [
+          2464.436,
+          1642.2
+        ],
+        [
+          2380.499,
+          1925.116
+        ],
+        [
+          1886.353,
+          1595.975
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        2196.257,
+        1652.012
+      ],
+      "area_px": 140325.879,
+      "area_mm2": 2192.592,
+      "bbox_px": [
+        1886,
+        1411,
+        2465,
+        1926
+      ],
+      "perimeter_px": 1615.437,
+      "quality": 0.934401,
+      "quality_breakdown": {
+        "fit": 0.823152,
+        "support": 1.0,
+        "shape": 0.985191,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.583843,
+        "agreement_shift_px": 0.50127,
+        "edge_support": 0.97,
+        "mask_iou": 0.985191,
+        "min_side_px": 232.212679
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          34.334,
+          178.154
+        ],
+        [
+          425.864,
+          143.446
+        ],
+        [
+          492.0,
+          368.554
+        ],
+        [
+          20.0,
+          362.217
+        ]
+      ],
+      "normalized_short_side_px": 184.62,
+      "rotation_deg": -32.897541,
+      "rectified_to_piece_matrix": [
+        [
+          0.6675563,
+          0.4318209,
+          -1928.42244725
+        ],
+        [
+          -0.4318209,
+          0.6675563,
+          111.38001597
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S12",
+      "rgba_path": "pieces/S12_rgba.png",
+      "mask_path": "pieces/S12_mask.png",
+      "debug_path": "pieces/S12_debug.png",
+      "corners_px": [
+        [
+          1601.578,
+          1413.244
+        ],
+        [
+          1993.255,
+          1762.511
+        ],
+        [
+          1795.682,
+          1967.453
+        ],
+        [
+          1439.254,
+          1621.08
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        1710.771,
+        1692.43
+      ],
+      "area_px": 139790.224,
+      "area_mm2": 2184.222,
+      "bbox_px": [
+        1439,
+        1413,
+        1994,
+        1968
+      ],
+      "perimeter_px": 1570.173,
+      "quality": 0.933091,
+      "quality_breakdown": {
+        "fit": 0.822372,
+        "support": 1.0,
+        "shape": 0.981042,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.586688,
+        "agreement_shift_px": 0.307828,
+        "edge_support": 0.95,
+        "mask_iou": 0.981042,
+        "min_side_px": 263.714507
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          20.0,
+          143.457
+        ],
+        [
+          492.0,
+          127.915
+        ],
+        [
+          490.475,
+          384.085
+        ],
+        [
+          43.238,
+          379.635
+        ]
+      ],
+      "normalized_short_side_px": 237.318,
+      "rotation_deg": -43.610056,
+      "rectified_to_piece_matrix": [
+        [
+          0.65157775,
+          0.6207072,
+          -1900.763593
+        ],
+        [
+          -0.6207072,
+          0.65157775,
+          216.72966544
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S13",
+      "rgba_path": "pieces/S13_rgba.png",
+      "mask_path": "pieces/S13_mask.png",
+      "debug_path": "pieces/S13_debug.png",
+      "corners_px": [
+        [
+          1075.906,
+          1772.259
+        ],
+        [
+          1578.92,
+          1805.661
+        ],
+        [
+          1624.915,
+          2107.966
+        ],
+        [
+          1040.196,
+          1978.355
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        1345.063,
+        1921.427
+      ],
+      "area_px": 137832.119,
+      "area_mm2": 2153.627,
+      "bbox_px": [
+        1040,
+        1772,
+        1625,
+        2108
+      ],
+      "perimeter_px": 1617.985,
+      "quality": 0.923152,
+      "quality_breakdown": {
+        "fit": 0.796486,
+        "support": 1.0,
+        "shape": 0.977527,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.682637,
+        "agreement_shift_px": 0.412653,
+        "edge_support": 1.0,
+        "mask_iou": 0.977527,
+        "min_side_px": 209.166796
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          20.0,
+          196.85
+        ],
+        [
+          409.747,
+          144.029
+        ],
+        [
+          492.0,
+          367.971
+        ],
+        [
+          24.804,
+          359.969
+        ]
+      ],
+      "normalized_short_side_px": 163.19,
+      "rotation_deg": -11.517081,
+      "rectified_to_piece_matrix": [
+        [
+          0.7644791,
+          0.15577239,
+          -1078.57649406
+        ],
+        [
+          -0.15577239,
+          0.7644791,
+          -990.40860117
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S14",
+      "rgba_path": "pieces/S14_rgba.png",
+      "mask_path": "pieces/S14_mask.png",
+      "debug_path": "pieces/S14_debug.png",
+      "corners_px": [
+        [
+          722.223,
+          1881.785
+        ],
+        [
+          1194.221,
+          2095.004
+        ],
+        [
+          1120.34,
+          2418.278
+        ],
+        [
+          648.578,
+          1957.77
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        958.972,
+        2118.287
+      ],
+      "area_px": 119049.051,
+      "area_mm2": 1860.141,
+      "bbox_px": [
+        648,
+        1881,
+        1195,
+        2419
+      ],
+      "perimeter_px": 1614.611,
+      "quality": 0.931891,
+      "quality_breakdown": {
+        "fit": 0.82196,
+        "support": 1.0,
+        "shape": 0.976819,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.588191,
+        "agreement_shift_px": 0.204384,
+        "edge_support": 0.89,
+        "mask_iou": 0.976819,
+        "min_side_px": 105.816682
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          26.538,
+          244.645
+        ],
+        [
+          386.386,
+          149.15
+        ],
+        [
+          492.0,
+          362.85
+        ],
+        [
+          20.0,
+          320.428
+        ]
+      ],
+      "normalized_short_side_px": 76.065,
+      "rotation_deg": -39.172687,
+      "rectified_to_piece_matrix": [
+        [
+          0.55727587,
+          0.45406092,
+          -1230.38415642
+        ],
+        [
+          -0.45406092,
+          0.55727587,
+          -476.09601897
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S15",
+      "rgba_path": "pieces/S15_rgba.png",
+      "mask_path": "pieces/S15_mask.png",
+      "debug_path": "pieces/S15_debug.png",
+      "corners_px": [
+        [
+          2181.078,
+          1887.46
+        ],
+        [
+          2252.249,
+          2222.656
+        ],
+        [
+          1892.1,
+          2324.55
+        ],
+        [
+          1720.15,
+          2078.764
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        2013.901,
+        2119.313
+      ],
+      "area_px": 137078.334,
+      "area_mm2": 2141.849,
+      "bbox_px": [
+        1720,
+        1887,
+        2253,
+        2325
+      ],
+      "perimeter_px": 1515.967,
+      "quality": 0.918633,
+      "quality_breakdown": {
+        "fit": 0.782191,
+        "support": 1.0,
+        "shape": 0.979464,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.73697,
+        "agreement_shift_px": 0.406023,
+        "edge_support": 1.0,
+        "mask_iou": 0.979464,
+        "min_side_px": 299.962295
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          492.0,
+          94.03
+        ],
+        [
+          461.235,
+          417.97
+        ],
+        [
+          105.956,
+          407.951
+        ],
+        [
+          20.0,
+          136.387
+        ]
+      ],
+      "normalized_short_side_px": 284.843,
+      "rotation_deg": 17.412592,
+      "rectified_to_piece_matrix": [
+        [
+          0.90608098,
+          -0.28416727,
+          -947.87894584
+        ],
+        [
+          0.28416727,
+          0.90608098,
+          -2235.9519247
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "piece_id": "S16",
+      "rgba_path": "pieces/S16_rgba.png",
+      "mask_path": "pieces/S16_mask.png",
+      "debug_path": "pieces/S16_debug.png",
+      "corners_px": [
+        [
+          1246.289,
+          2156.511
+        ],
+        [
+          1655.892,
+          2194.851
+        ],
+        [
+          1713.255,
+          2465.046
+        ],
+        [
+          1214.388,
+          2473.217
+        ]
+      ],
+      "corner_count": 4,
+      "center_px": [
+        1451.278,
+        2327.115
+      ],
+      "area_px": 133103.478,
+      "area_mm2": 2079.742,
+      "bbox_px": [
+        1214,
+        2156,
+        1714,
+        2474
+      ],
+      "perimeter_px": 1504.853,
+      "quality": 0.915875,
+      "quality_breakdown": {
+        "fit": 0.770528,
+        "support": 1.0,
+        "shape": 0.984761,
+        "vertices": 1.0,
+        "convex": 1.0,
+        "fit_rms_px": 0.782038,
+        "agreement_shift_px": 0.213858,
+        "edge_support": 1.0,
+        "mask_iou": 0.984761,
+        "min_side_px": 276.217376
+      },
+      "needs_manual_review": false,
+      "manual_review_reasons": [],
+      "normalized_corners_px": [
+        [
+          26.802,
+          104.804
+        ],
+        [
+          417.677,
+          110.837
+        ],
+        [
+          492.0,
+          362.566
+        ],
+        [
+          20.0,
+          407.196
+        ]
+      ],
+      "normalized_short_side_px": 262.472,
+      "rotation_deg": -4.46316,
+      "rectified_to_piece_matrix": [
+        [
+          0.94735505,
+          0.07394558,
+          -1313.34038564
+        ],
+        [
+          -0.07394558,
+          0.94735505,
+          -1846.02029084
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    }
+  ]
+}
