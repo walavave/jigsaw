@@ -1,7 +1,9 @@
 # 16 片几何拼图机器视觉重建
 
-> 项目状态：四阶段工程骨架 + Stage 1 可执行实现 v0.4（2026-10-28）  
+> 项目状态：Stage 1/2 可执行 + Stage 3 几何求解 + Stage 4 数字拼接与人工摆放（2026-10-29）
 > 目标：把一张参考图按“递归两刀切分”得到 16 个直边凸多边形碎片，打印裁剪后散落拍摄，再经过相机标定、图像提取、特征匹配和最终拼接，恢复完整图像及每块碎片的位置。
+
+> **当前分支实现说明**：本文保留最初的“参考图特征匹配”设计。`step2` 已改用最长边坐标系 1:1 裁剪，`step3` 实际提供 [`quad_puzzle`](stage3_feature_matching/quad_puzzle/README.md) 的几何位姿求解。Stage 4 直接兼容这套已实现的输出，也支持原设计的 `assignments.json`。运行与人工摆放说明见 [`stage4_assembly/README.md`](stage4_assembly/README.md)，实拍结果与复现指标见 [`docs/REPRODUCTION_STAGE4.md`](docs/REPRODUCTION_STAGE4.md)。生成的图像和操作表不纳入版本控制，运行后在 `stage4_assembly/output/` 查看。
 
 > **当前切割方案（v0.3）**  
 > 不再使用等大方格。先靠近画面中心选一个点，过该点画两条相交直线，把整张图分成 4 个凸区域；再在每个区域靠近中心处选一个点，过该点画两条相交直线，把该区域分成 4 块。四个区域递归后共得到 16 块。相邻一级区域的二级切线落在共同边界上的位置会被强制错开，避免接成一条连续直线。具体实现见 `shared/jigsaw_common/cut_layout.py`，打印文件生成见 `stage1_capture_calibration/make_print_pdf.py`。
@@ -807,6 +809,15 @@ rotation_deg = atan2(H[1, 0], H[0, 0])
 
 ## 6. 阶段四：按顺序拼接完整图像
 
+阶段四已实现。对仓库提交的实拍数据，在根目录执行：
+
+```bash
+python stage4_assembly/assemble.py \
+  --reference stage1_capture_calibration/output/reference/reference.png
+```
+
+生成数字重建图、未校色版、接缝/质量报告，以及 `placement_plan.json`、中文人工操作表、取片索引和 16 张顺序图。几何布局输入保持实物测量尺度；若使用下述参考图分配协议，则按源多边形回原图坐标。详见 [Stage 4 文档](stage4_assembly/README.md) 和 [复现记录](docs/REPRODUCTION_STAGE4.md)。
+
 ### 6.1 阶段目标
 
 阶段四根据阶段三的 `scan_piece_id -> source_piece_id` 映射，把 16 块扫描碎片变换回各自的源多边形位置，恢复完整图像。
@@ -879,6 +890,8 @@ OpenCV 的 `cv2.detail_MultiBandBlender` 或 `cv2.detail_FeatherBlender` 可以�
 - 接缝区域没有明显断裂或色块跳变。
 
 ### 6.3 实物拼接扩展
+
+当前已实现**人工摆放**：计划从目标左上角锚点开始，依次选择与已放碎片共享边最长的下一片，给出原桌面取片位置、应转角度、目标中心/多边形、需对齐的邻片及复核项。几何模式使用有效的 `px_per_mm` 额外输出相对目标外框的毫米坐标；本阶段不包含机械臂执行。
 
 如果最后由机械臂或人工按顺序摆放，阶段四输出一份明确的摆放计划：
 

@@ -4,4 +4,5 @@ Pillow>=10.0
 reportlab>=4.0
 shapely>=2.0
 scipy>=1.10
+scikit-image>=0.22
 
