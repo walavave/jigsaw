@@ -2,8 +2,17 @@
   "schema_version": "1.0",
   "color_space": "Lab",
   "color_correction": true,
+  "color_strength": 0.5,
+  "color_gain_limits": [0.8, 1.25],
+  "color_max_offset": 10.0,
+  "color_sample_erode_px": 3,
   "blend_mode": "feather",
   "feather_px": 3,
-  "evaluate_ssim": true
+  "edge_erode_px": 0,
+  "evaluate_ssim": true,
+  "adjacency_tolerance_px": 8.0,
+  "write_steps": true,
+  "fail_on_manual_review": false,
+  "max_canvas_pixels": 25000000
 }
 
