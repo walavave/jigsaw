@@ -1,0 +1,5202 @@
+diff --git a/README.md b/README.md
+index c0827e5..68e4910 100644
+--- a/README.md
++++ b/README.md
+@@ -1,8 +1,10 @@
+ # 16 片几何拼图机器视觉重建
+ 
+-> 项目状态：四阶段工程骨架 + Stage 1 可执行实现 v0.4（2026-10-28）  
++> 项目状态：Stage 1/2 可执行 + Stage 3 几何求解 + Stage 4 数字拼接与人工摆放（2026-10-29）
+ > 目标：把一张参考图按“递归两刀切分”得到 16 个直边凸多边形碎片，打印裁剪后散落拍摄，再经过相机标定、图像提取、特征匹配和最终拼接，恢复完整图像及每块碎片的位置。
+ 
++> **当前分支实现说明**：本文保留最初的“参考图特征匹配”设计。`step2` 已改用最长边坐标系 1:1 裁剪，`step3` 实际提供 [`quad_puzzle`](stage3_feature_matching/quad_puzzle/README.md) 的几何位姿求解。Stage 4 直接兼容这套已实现的输出，也支持原设计的 `assignments.json`。运行与人工摆放说明见 [`stage4_assembly/README.md`](stage4_assembly/README.md)，实拍结果见 [`output/placement_guide.md`](stage4_assembly/output/placement_guide.md)。
++
+ > **当前切割方案（v0.3）**  
+ > 不再使用等大方格。先靠近画面中心选一个点，过该点画两条相交直线，把整张图分成 4 个凸区域；再在每个区域靠近中心处选一个点，过该点画两条相交直线，把该区域分成 4 块。四个区域递归后共得到 16 块。相邻一级区域的二级切线落在共同边界上的位置会被强制错开，避免接成一条连续直线。具体实现见 `shared/jigsaw_common/cut_layout.py`，打印文件生成见 `stage1_capture_calibration/make_print_pdf.py`。
+ 
+@@ -807,6 +809,15 @@ rotation_deg = atan2(H[1, 0], H[0, 0])
+ 
+ ## 6. 阶段四：按顺序拼接完整图像
+ 
++阶段四已实现。对仓库提交的实拍数据，在根目录执行：
++
++```bash
++python stage4_assembly/assemble.py \
++  --reference stage1_capture_calibration/output/reference/reference.png
++```
++
++生成数字重建图、未校色版、接缝/质量报告，以及 `placement_plan.json`、中文人工操作表、取片索引和 16 张顺序图。几何布局输入保持实物测量尺度；若使用下述参考图分配协议，则按源多边形回原图坐标。详见 [Stage 4 文档](stage4_assembly/README.md) 和 [复现记录](docs/REPRODUCTION_STAGE4.md)。
++
+ ### 6.1 阶段目标
+ 
+ 阶段四根据阶段三的 `scan_piece_id -> source_piece_id` 映射，把 16 块扫描碎片变换回各自的源多边形位置，恢复完整图像。
+@@ -880,6 +891,8 @@ OpenCV 的 `cv2.detail_MultiBandBlender` 或 `cv2.detail_FeatherBlender` 可以
+ 
+ ### 6.3 实物拼接扩展
+ 
++当前已实现**人工摆放**：计划从目标左上角锚点开始，依次选择与已放碎片共享边最长的下一片，给出原桌面取片位置、应转角度、目标中心/多边形、需对齐的邻片及复核项。几何模式使用有效的 `px_per_mm` 额外输出相对目标外框的毫米坐标；本阶段不包含机械臂执行。
++
+ 如果最后由机械臂或人工按顺序摆放，阶段四输出一份明确的摆放计划：
+ 
+ ```json
+diff --git a/docs/REPRODUCTION_STAGE4.md b/docs/REPRODUCTION_STAGE4.md
+new file mode 100644
+index 0000000..e6b106a
+--- /dev/null
++++ b/docs/REPRODUCTION_STAGE4.md
+@@ -0,0 +1,79 @@
++# Stage 4 实现与复现记录
++
++日期：2026-10-29。基础分支 `step3`，固定提交
++`12f0f7bf1fdb4a885af069a29052e27ec386cc3d`；它已包含 `step2` 的
++`64d689d4b1006407f4e7db03f289b910b75474a2`。
++
++## 输入与实现范围
++
++- `stage2_piece_extraction/output/pieces.json`：`stage2-extract-1.4.0`，
++  session `9ab5743b5eec79a1`，16 个最长边坐标系中的 1:1 裁剪图。
++- `stage3_feature_matching/quad_puzzle/examples/output.json`：
++  `polygon-assembly-result/v2`，状态 approximate，16 个旋转平移位姿。
++- 参考图：`stage1_capture_calibration/output/reference/reference.png`，1280×720。
++- 交付：真实纹理数字拼接、保守校色、接缝诊断、质量指标、人工摆放计划。
++  不实现机械臂部分，不重新求解 Stage 3，不拿原图补缺口。
++
++早期根 README 设想 SIFT + 源编号分配，但当前 step3 实际实现为无图像内容参与的几何求解。
++本阶段同时支持两者，默认使用已存在的几何结果。关键转换为
++`H_PNG_to_assembly = G @ T @ B @ inverse(C)`，具体含义见 Stage 4 README。
++从原桌面转动的角度由 `H_PNG_to_assembly @ C` 计算，不能直接抄基边角度。
++
++## 环境与命令
++
++验证环境：Python 3.12，NumPy 2.3.5，OpenCV 5.0.0，Shapely 2.2.0，
++SciPy 1.17.0，scikit-image 0.26.0。项目依赖中新增 scikit-image，用于 SSIM。
++实现只用 CPU，无需 CUDA 或额外模型权重。
++
++```bash
++python -m pip install -r requirements.txt
++python stage4_assembly/assemble.py \
++  --reference stage1_capture_calibration/output/reference/reference.png
++python -m unittest discover -s tests -v
++```
++
++`--reference` 只用于选择整图朝向、Lab 统计校色、评价和比较图。
++本例候选 0° 的灰度相关系数为 −0.31697，180° 为 0.92756，最终选 180°。
++画布保持测量尺度；参考图显式重采样到 2028×1143 后才评价，相关信息在报告中记录。
++
++## 客观结果
++
++| 项目 | 结果 |
++| --- | ---: |
++| 碎片数 | 16/16 |
++| 连续矩形宽×高 | 2027.016623×1142.954974 px |
++| 栅格图像宽×高 | 2028×1143 px |
++| 连续几何覆盖率 | 99.446573% |
++| 栅格有效覆盖率 | 99.551813% |
++| 栅格未覆盖像素 | 10,389 |
++| 原始 RGB PSNR / 灰度 SSIM | 18.6555 dB / 0.73938 |
++| 校色 RGB PSNR / 灰度 SSIM | 20.4931 dB / 0.74444 |
++| 有效接缝统计 | 24 条，均有两侧样本 |
++| 人工顺序连通性 | 1 个锚点；余下 15 步均对齐已放邻片 |
++| 目标外框物理尺寸 | 约 253.38×142.87 mm，8 px/mm |
++
++连续几何覆盖率与上游报告在 1e−7 内一致；差异仅来自 Stage 2 完整 JSON
++中顶点的小数取舍。栅格覆盖率因填充边界和 alpha 插值而稍高，不应混用。
++校色改善亮度/颜色统计，但实拍件已有明显颜色损失，不声称恢复了原图颜色。
++SSIM 未达到最初文档建议的 0.85，当前没有做任何隐藏的参考图填充或局部重新配准。
++
++最终 `status=review`，保留上游近似解/严格验收未通过，以及 S06 的复核提示。
++默认退出 0 只代表产物生成成功；严格流水线可设 `fail_on_manual_review=true`。
++
++## 验证
++
++全仓库 **84 项测试通过**，其中 Stage 4 新增 **17 项**。
++新增测试包括：
++
++- 具有已知逐像素真值、非零 PNG 留白、倾斜原桌面坐标的独立合成样本；
++- 基边负 x 坐标与仅有角点偏移时的转换；
++- 透明边的分数像素插值不混入黑色；
++- 两种输入协议、从整张俯视图出发的单应合成；
++- 缺口在提供参考图时仍保留；公共角点不误判为公共边；
++- 旋转整图时同步旋转目标多边形和人工角度；
++- 重复/遗漏 ID、错误单位、无解状态、NaN、空掩码、输出覆盖输入等拒绝路径；
++- 复核项传播、禁用步骤图、重新运行移除过期产物；
++- 仓库实拍 16 块端到端回归及校色前后指标。
++
++静态检查：`ruff check --isolated --select E,F --ignore E501` 通过；`git diff --check` 通过。
++详细 CLI 和各输出说明见 [`stage4_assembly/README.md`](../stage4_assembly/README.md)。
+diff --git a/requirements.txt b/requirements.txt
+index 50f99cc..55b980b 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -4,4 +4,5 @@ Pillow>=10.0
+ reportlab>=4.0
+ shapely>=2.0
+ scipy>=1.10
++scikit-image>=0.22
+ 
+diff --git a/stage4_assembly/README.md b/stage4_assembly/README.md
+index 437daf8..9bc57ce 100644
+--- a/stage4_assembly/README.md
++++ b/stage4_assembly/README.md
+@@ -1,24 +1,161 @@
+-# Stage 4 - Assembly
++# Stage 4 — 数字拼接与人工摆放
+ 
+-输入：
++`assemble.py` 根据 Stage 3 布局，将 Stage 2 的真实 RGBA 碎片拼回画布，
++输出原始/颜色校正版、接缝诊断、质量报告和逐步人工摆放计划。
++默认接入 `step2`、`step3` 已提交的数据，不重新运行求解器。
+ 
+-- 阶段一的 `jigsaw_layout.json` 和原始参考图
+-- 阶段二的碎片 RGBA 和 masks
+-- 阶段三的 `assignments.json`
++## 1. 运行
+ 
+-任务：
++在仓库根目录执行：
+ 
+-1. 根据 `H_scan_to_source` 把碎片变换回源坐标系。
+-2. 按源多边形掩码粘贴到完整画布。
+-3. 在 Lab 空间做保守颜色校正。
+-4. 对多边形接缝做羽化或 multi-band blending。
+-5. 输出 SSIM、PSNR 和接缝报告。
++```bash
++python -m pip install -r requirements.txt
++python stage4_assembly/assemble.py \
++  --reference stage1_capture_calibration/output/reference/reference.png
++```
+ 
+-输出：
++默认读取 `stage2_piece_extraction/output/pieces.json` 及其相对路径下的 RGBA/mask，
++布局来自 `stage3_feature_matching/quad_puzzle/examples/output.json`，
++输出到 `stage4_assembly/output/`。这些是仓库样本的结果。
++新一批数据必须显式指定对应输入：
+ 
+-- `output/assembled.png`
+-- `output/assembly_report.json`
+-- `output/seams.png`
++```bash
++python stage4_assembly/assemble.py \
++  --pieces /path/to/stage2/output/pieces.json \
++  --placements /path/to/stage3/result.json \
++  --reference /path/to/reference.png \
++  --config stage4_assembly/config/assembly.example.json \
++  --output /path/to/assembly
++```
+ 
+-当前状态：目录和交接契约已建立，拼接脚本待实现。
++| 参数 | 含义 |
++| --- | --- |
++| `--pieces` | 完整版 `pieces.json`；精简版 `pieces_base_edge.json` 缺少图像路径，不能替代 |
++| `--placements` / `--assignments` | Stage 3 位姿或参考图分配 JSON |
++| `--reference` | 可选：整图朝向判别、颜色统计与评价 |
++| `--layout` | 参考图分配模式必需的 `jigsaw_layout.json` |
++| `--orientation auto\|0\|90\|180\|270` | 整图顺时针旋转；auto 只在提供参考图时判别朝向 |
++| `--no-color-correction` | 保留拍摄颜色，仍可评价/判别朝向 |
++| `--no-steps` | 不生成逐步 PNG，仍输出完整计划及总览 |
++| `--config` | JSON 参数，可覆盖部分默认值；未知参数报错 |
++
++不提供参考图时保持求解器朝向，不做校色，SSIM/PSNR 为不可用。
++样本求解器朝向与原图相差 180°，复现正向效果请使用带参考图的命令。
++参考图只选择整图朝向，不改变碎片相对布局。
++
++退出码：0 = 成功生成结果（可能含复核项）；1 = 已生成结果且
++`fail_on_manual_review=true`、存在复核项；2 = 输入/运行/读写错误。
++同时读取报告的 `status/warnings`，不能只靠退出码判断是否免复核。
++未知/无解布局、重复/遗漏 ID、错误单位、空掩码、奇异/镜像单应会被拒绝。
++同名产物会覆盖；重跑会清理过期步骤图和可选比较图，不清理其他文件。
++
++## 2. 两种输入契约
++
++### 已实现的 Stage 3 几何位姿
++
++接受 `polygon-assembly-result/v2`、`polygon-assembly-result/v1`、
++`quad-assembly-result/v1`，状态须为 `feasible/approximate`。
++`placements[].id` 须恰好覆盖 Stage 2 的 `piece_id`，单位须与
++`pieces.json.coordinate_system` 一致，裁剪比例须为 1。
++
++**`rotationDeg/origin` 作用于基边局部坐标，origin 是 P0 的落点，不是 PNG 左上角。**
++Stage 2 PNG 有留白，基边坐标还可能有负 x。令
++`B=rectified_to_base_edge_matrix`、`C=rectified_to_piece_matrix`、
++`T` 为 Stage 3 的旋转平移、`G` 为整图朝向变换，则：
++
++```text
++H_PNG_to_assembly = G @ T @ B @ inverse(C)
++H_table_to_assembly = H_PNG_to_assembly @ C
++```
++
++用 `image_corners_px` 交叉检查转换；缺少矩阵时，可由 PNG 角点和基边角点的
++恒定偏移恢复裁剪平移，不猜测所有留白都是 20 px。
++画布保持实物几何尺度，评价时显式缩放参考图。
++本模式不需要 P 编号，计划的 `source_piece_id=null`，不会编造对应关系。
++
++### README 原设计中的参考图 assignments
++
++```bash
++python stage4_assembly/assemble.py \
++  --pieces stage2_piece_extraction/output/pieces.json \
++  --assignments stage4_assembly/input/assignments.json \
++  --layout stage1_capture_calibration/output/cut_pdf/jigsaw_layout.json \
++  --reference stage1_capture_calibration/output/reference/reference.png
++```
++
++JSON 使用 `schema_version="1.0"`、`assignments` 数组，各项包含
++`scan_piece_id/source_piece_id/homography_piece_to_source/confidence/status`。
++默认单应从 PNG 像素映射到参考图；`H_piece_to_source`、早期的 `H_scan_to_source`
++为同义字段，每条只能提供一个。若单应从整张俯视图出发，必须指定
++`transform_source_frame="rectified_px"`（默认 `piece_image_px`），程序会合成裁剪逆变换。
++`accepted/review` 可重建，review 显式保留。源编号须对 layout 的全部多边形形成一一映射，
++`unassigned` 须为空。目标已在原图坐标中，不再旋转整图；参考图尺寸须与 layout 一致。
++
++## 3. 拼接、颜色与质量
++
++RGB 先预乘 alpha，再变换颜色/alpha 并解预乘，避免透明黑边插值污染。
++纹理由目标多边形限制，重叠处按掩码距离羽化并归一化权重。
++另可选 `blend_mode="overwrite"` 作对照；不支持的融合模式直接报错。
++
++Lab 均值/方差校正强度默认 0.5；标准差比限制在 0.8–1.25，均值差限制为
++各 Lab 通道 ±10，再乘强度；低方差区域不放大噪声。
++同时输出未校色的 `assembled_raw.png`。
++默认 `edge_erode_px=0`，避免再次腐蚀制造缝隙；可配置腐蚀去纸边，
++但真实覆盖会减少并反映在报告中。羽化只混合实际重叠区域，不修正几何错位。
++**参考图从不用于缺口填充，缺口保留黑色并输出覆盖掩码。**
++
++有参考图时，同时评价原始/校色版的全画布 RGB PSNR、仅覆盖区 RGB PSNR、
++全画布灰度 SSIM。PSNR 完全相同以 `identical=true, psnr_db=null` 表示无穷大；
++无参考图则 `available=false`。灰度 SSIM 不衡量色彩恢复，不能与彩色 SSIM 混用。
++未覆盖区参与全画布评价。每条接缝报告两侧平均 Delta E76、梯度幅值差，
++以及参考图同位置的颜色差/梯度残差；真实图案也有颜色边界，这些值不是错缝率。
++若没有有效两侧样本，则样本数为 0、指标为 null。
++连续几何缺口/重叠/越界与栅格覆盖分别统计，前者不受取整影响。
++
++## 4. 人工顺序与坐标
++
++打开 `output/placement_guide.md`：
++
++- `scan_locations.png` 标出原桌面取片位置，原俯视图可读时生成。
++- `piece_index.png` 是按摆放顺序排列的碎片正面缩略图。
++- `placement_order.png` 标出步骤号、S 编号与目标位置。
++- `steps/01.png..16.png` 是逐步装配，绿边为新增碎片；表格步骤号可打开图片。
++
++从最靠近目标左上角的碎片开始，每次优先选与已放碎片公共边总长最大的下一片。
++默认允许 8 px 测量偏差，仅接触一个角不算公共边。邻接图断开时显式另起锚点。
++这是确定性人工对齐顺序，不声称操作次数或搬运距离最优。
++
++`placement_plan.json` 保留 README §6.3 的 `slot` 数组。
++每步含目标多边形/中心、PNG 单应、原桌面位置、从原桌面朝向转过的角度、
++已放邻片、复核标记和步骤图路径。角度正值顺时针，范围 `[-180,180)`，
++不同于 Stage 3 相对于基边的 `rotationDeg`。
++几何模式且 `px_per_mm` 为有限、正、各向同性密度时，额外输出相对目标外框的毫米坐标。
++样本外框约 **253.38×142.87 mm**：在空白区自定左上角，x 向右、y 向下。
++目标坐标轴须与原俯视图平行；整体转动外框时，人工转角还须叠加该转角。
++原照片中的碎片若已被转动，角度须重新核对。参考图分配模式不从扫描密度猜原图毫米比例。
++本阶段只供人工摆放，无机械臂、抓取、手眼标定或机器人轨迹代码。
++
++## 5. 结果与验证
++
++样本 16/16 块；连续外框 2027.016623×1142.954974 px，栅格 2028×1143。
++提供参考图时选整图顺时针 180°：
++
++| 指标 | 未校色 | 保守校色 |
++| --- | ---: | ---: |
++| RGB PSNR | 18.6555 dB | 20.4931 dB |
++| 灰度 SSIM | 0.73938 | 0.74444 |
++
++连续几何覆盖率 99.446573%，栅格覆盖率 99.551813%；后者受栅格化和 alpha 插值影响。
++实拍印刷件的颜色/对比度损失、手剪误差、上游近似布局使 SSIM 未达早期建议的 0.85。
++报告为 `review`：Stage 3 近似解未通过严格几何验收，Stage 2 对 S06 有复核标记。
++数字重建完成不表示上游误差消失。
++
++```bash
++python -m unittest discover -s tests -p 'test_stage4_assembly.py' -v
++python -m unittest discover -s tests -v
++```
++
++测试覆盖独立像素真值、裁剪偏移、透明边、两种协议、桌面角度、缺口不补图、
++严格输入拒绝、重复运行及实拍回归。
++详见 [`docs/REPRODUCTION_STAGE4.md`](../docs/REPRODUCTION_STAGE4.md)。
+ 
+diff --git a/stage4_assembly/assemble.py b/stage4_assembly/assemble.py
+new file mode 100644
+index 0000000..10b4465
+--- /dev/null
++++ b/stage4_assembly/assemble.py
+@@ -0,0 +1,1369 @@
++#!/usr/bin/env python3
++"""Reconstruct Stage 2 textures from Stage 3 poses and plan manual placement.
++
++The geometry solver rotates base-edge coordinates, not PNG coordinates.  A PNG
++includes a crop offset; its transform is pose @ rectified_to_base @
++inverse(rectified_to_piece).  No reference pixels are pasted into the result.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import math
++import sys
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++import cv2
++import numpy as np
++from shapely.geometry import Point, Polygon, box
++from shapely.ops import unary_union
++from skimage.metrics import structural_similarity
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "shared"))
++from jigsaw_common.io import imread, imwrite, read_json  # noqa: E402
++
++VERSION = "stage4-assembly-1.0.0"
++DEFAULT_PIECES = ROOT / "stage2_piece_extraction/output/pieces.json"
++DEFAULT_PLACEMENTS = ROOT / "stage3_feature_matching/quad_puzzle/examples/output.json"
++DEFAULT_REFERENCE = ROOT / "stage1_capture_calibration/output/reference/reference.png"
++DEFAULT_OUTPUT = ROOT / "stage4_assembly/output"
++DEFAULT_CONFIG = {
++    "schema_version": "1.0",
++    "color_space": "Lab",
++    "color_correction": True,
++    "color_strength": 0.5,
++    "color_gain_limits": [0.8, 1.25],
++    "color_max_offset": 10.0,
++    "color_sample_erode_px": 3,
++    "blend_mode": "feather",
++    "feather_px": 3.0,
++    "edge_erode_px": 0,
++    "evaluate_ssim": True,
++    "adjacency_tolerance_px": 8.0,
++    "write_steps": True,
++    "fail_on_manual_review": False,
++    "max_canvas_pixels": 25000000,
++}
++
++
++def require(condition: bool, message: str) -> None:
++    if not condition:
++        raise ValueError(message)
++
++
++def finite_array(value: Any, shape: tuple[int, ...], name: str) -> np.ndarray:
++    arr = np.asarray(value, dtype=np.float64)
++    require(
++        arr.shape == shape and np.isfinite(arr).all(),
++        f"{name}: expected finite {shape}",
++    )
++    return arr
++
++
++def matrix(value: Any, name: str) -> np.ndarray:
++    h = finite_array(value, (3, 3), name)
++    norm = np.linalg.norm(h)
++    require(
++        norm > 0 and abs(np.linalg.det(h / norm)) > 1e-15, f"{name}: singular transform"
++    )
++    return h / norm
++
++
++def transform(h: np.ndarray, points: np.ndarray) -> np.ndarray:
++    p = np.column_stack((points, np.ones(len(points)))) @ h.T
++    d = p[:, 2]
++    require(
++        np.isfinite(p).all() and np.all(np.abs(d) > 1e-12),
++        "transform reaches projective infinity",
++    )
++    require(np.all(d > 0) or np.all(d < 0), "transform crosses projective infinity")
++    return p[:, :2] / d[:, None]
++
++
++def polygon(value: Any, name: str) -> np.ndarray:
++    p = np.asarray(value, dtype=np.float64)
++    require(
++        p.ndim == 2 and p.shape[1] == 2 and len(p) >= 3 and np.isfinite(p).all(),
++        f"{name}: invalid vertices",
++    )
++    shape = Polygon(p)
++    require(
++        shape.is_valid and shape.area > 1e-6,
++        f"{name}: degenerate or self-intersecting polygon",
++    )
++    require(
++        shape.convex_hull.area - shape.area < max(1e-5, shape.area * 1e-6),
++        f"{name}: polygon must be convex",
++    )
++    return p
++
++
++def signed_area(p: np.ndarray) -> float:
++    return float(
++        np.sum(p[:, 0] * np.roll(p[:, 1], -1) - p[:, 1] * np.roll(p[:, 0], -1)) / 2
++    )
++
++
++def resolve_config(config: dict | None) -> dict:
++    c = dict(DEFAULT_CONFIG)
++    if config:
++        require(
++            not (set(config) - set(c)),
++            f"unknown configuration keys: {sorted(set(config) - set(c))}",
++        )
++        c.update(config)
++    require(
++        c["schema_version"] == "1.0" and c["color_space"] == "Lab",
++        "unsupported config version / color space",
++    )
++    for key in (
++        "color_correction",
++        "evaluate_ssim",
++        "write_steps",
++        "fail_on_manual_review",
++    ):
++        require(isinstance(c[key], bool), f"{key} must be boolean")
++    for key in (
++        "color_strength",
++        "color_max_offset",
++        "feather_px",
++        "adjacency_tolerance_px",
++    ):
++        require(
++            isinstance(c[key], (int, float))
++            and not isinstance(c[key], bool)
++            and math.isfinite(c[key])
++            and c[key] >= 0,
++            f"invalid {key}",
++        )
++    require(c["color_strength"] <= 1, "color_strength must be in [0,1]")
++    require(
++        c["blend_mode"] in {"feather", "overwrite"},
++        "blend_mode must be feather or overwrite",
++    )
++    for key in ("color_sample_erode_px", "edge_erode_px", "max_canvas_pixels"):
++        require(
++            isinstance(c[key], int) and not isinstance(c[key], bool) and c[key] >= 0,
++            f"invalid {key}",
++        )
++    limits = finite_array(c["color_gain_limits"], (2,), "color_gain_limits")
++    require(0 < limits[0] <= 1 <= limits[1], "color gains must bracket 1")
++    return c
++
++
++def mask_polygon(p: np.ndarray, size: tuple[int, int]) -> np.ndarray:
++    mask = np.zeros((size[1], size[0]), np.uint8)
++    # Fixed-point vertices retain subpixel accuracy; never wrap enormous inputs.
++    require(np.max(np.abs(p)) < 1e7, "polygon coordinates are too large")
++    cv2.fillPoly(mask, [np.round(p * 256).astype(np.int32)], 255, shift=8)
++    return mask
++
++
++def base_vertices(piece: dict) -> np.ndarray:
++    if "base_edge_corners_px" in piece:
++        return polygon(piece["base_edge_corners_px"], "base_edge_corners_px")
++    b = piece["base_edge"]
++    remaining = b.get("remainingVertices", [b.get("p2"), b.get("p3")])
++    return polygon([[0, 0], [b["baseLength"], 0], *remaining], "base_edge")
++
++
++def image_to_base(piece: dict, base: np.ndarray) -> np.ndarray:
++    if (
++        "rectified_to_base_edge_matrix" in piece
++        and "rectified_to_piece_matrix" in piece
++    ):
++        h = matrix(
++            piece["rectified_to_base_edge_matrix"], "rectified_to_base_edge_matrix"
++        ) @ np.linalg.inv(
++            matrix(piece["rectified_to_piece_matrix"], "rectified_to_piece_matrix")
++        )
++    else:
++        image_points = finite_array(
++            piece.get("image_corners_px"), base.shape, "image_corners_px"
++        )
++        offset = image_points - base
++        require(
++            np.max(np.abs(offset - offset[0])) < 0.02,
++            "PNG/base frames must differ by a crop translation",
++        )
++        h = np.array([[1, 0, -offset[0, 0]], [0, 1, -offset[0, 1]], [0, 0, 1]], float)
++    if "image_corners_px" in piece:
++        image_points = finite_array(
++            piece["image_corners_px"], base.shape, "image_corners_px"
++        )
++        require(
++            np.max(np.abs(transform(h, image_points) - base)) < 0.03,
++            "inconsistent PNG/base-edge corner transforms",
++        )
++    return h
++
++
++@dataclass
++class Fragment:
++    id: str
++    metadata: dict
++    rgba: np.ndarray
++    h: np.ndarray  # PNG -> assembly canvas
++    target: np.ndarray
++    source_id: str | None = None
++    confidence: float | None = None
++    match_status: str = "accepted"
++
++
++def unique_records(records: Any, key: str, name: str) -> dict[str, dict]:
++    require(
++        isinstance(records, list) and bool(records), f"{name} must be a nonempty array"
++    )
++    out = {}
++    for record in records:
++        require(isinstance(record, dict), f"invalid {name} entry")
++        id_ = record.get(key)
++        require(
++            isinstance(id_, str) and bool(id_) and id_ not in out,
++            f"missing / duplicate {key}: {id_}",
++        )
++        out[id_] = record
++    return out
++
++
++def load_inputs(
++    pieces_path: Path, placements_path: Path, layout_path: Path | None, config: dict
++) -> tuple:
++    manifest, result = read_json(pieces_path), read_json(placements_path)
++    require(
++        isinstance(manifest, dict) and isinstance(result, dict),
++        "handoffs must be JSON objects",
++    )
++    require(
++        manifest.get("schema_version") == "1.0", "unsupported pieces schema_version"
++    )
++    pieces = unique_records(manifest.get("pieces"), "piece_id", "pieces")
++    require(
++        manifest.get("detected_piece_count", len(pieces)) == len(pieces),
++        "detected_piece_count does not match pieces",
++    )
++    require(
++        manifest.get("expected_piece_count", len(pieces)) == len(pieces),
++        "incomplete Stage 2 extraction",
++    )
++    if result.get("session_id") and manifest.get("session_id"):
++        require(
++            result["session_id"] == manifest["session_id"],
++            "Stage 2 / 3 session_id mismatch",
++        )
++    warnings: list[str] = []
++    if "placements" in result:
++        mode = "geometry_placements"
++        require(
++            result.get("schema")
++            in {
++                "polygon-assembly-result/v2",
++                "polygon-assembly-result/v1",
++                "quad-assembly-result/v1",
++            },
++            "unsupported placement schema",
++        )
++        require(
++            result.get("status") in {"feasible", "approximate"},
++            "Stage 3 did not produce a usable layout",
++        )
++        require(
++            result.get("coordinateSystem") == "image",
++            "placements must use image coordinates",
++        )
++        require(
++            result.get("unit") == manifest.get("coordinate_system"),
++            "Stage 2 / 3 coordinate units differ",
++        )
++        require(
++            manifest.get("piece_scale", 1) == 1,
++            "geometry mode requires Stage 2 scale 1",
++        )
++        placements = unique_records(result["placements"], "id", "placements")
++        rect = finite_array(
++            [result["rectangle"]["width"], result["rectangle"]["height"]],
++            (2,),
++            "rectangle",
++        )
++        if result["status"] == "approximate" or not result.get("verification", {}).get(
++            "valid", True
++        ):
++            warnings.append(
++                "Stage 3 layout is approximate; gaps, overlaps and boundary errors remain."
++            )
++        layout = None
++    else:
++        mode = "reference_assignments"
++        require(
++            result.get("schema_version") == "1.0",
++            "unsupported assignments schema_version",
++        )
++        require(not result.get("unassigned"), "Stage 3 contains unassigned pieces")
++        require(layout_path is not None, "assignments require --layout")
++        layout = read_json(layout_path)
++        require(
++            layout.get("schema_version") == "1.0", "unsupported layout schema_version"
++        )
++        sources = unique_records(layout["pieces"], "piece_id", "layout pieces")
++        placements = unique_records(
++            result["assignments"], "scan_piece_id", "assignments"
++        )
++        source_ids = [a.get("source_piece_id") for a in placements.values()]
++        require(
++            len(set(source_ids)) == len(source_ids) and set(source_ids) == set(sources),
++            "source assignments must cover layout exactly once",
++        )
++        rect = finite_array(layout["source_size_px"], (2,), "source_size_px")
++    require(
++        set(pieces) == set(placements),
++        "Stage 3 IDs must cover Stage 2 IDs exactly once",
++    )
++    require(np.all(rect > 0), "rectangle dimensions must be positive")
++    require(
++        math.ceil(rect[0]) * math.ceil(rect[1]) <= config["max_canvas_pixels"],
++        "canvas exceeds max_canvas_pixels",
++    )
++    fragments = []
++    for id_, p in pieces.items():
++        rgba = imread(pieces_path.parent / p["rgba_path"], cv2.IMREAD_UNCHANGED)
++        require(
++            rgba.ndim == 3 and rgba.shape[2] == 4 and rgba.dtype == np.uint8,
++            f"{id_}: expected 8-bit RGBA PNG",
++        )
++        if "piece_size_px" in p:
++            require(
++                list(rgba.shape[1::-1]) == p["piece_size_px"],
++                f"{id_}: PNG size differs from manifest",
++            )
++        if p.get("mask_path"):
++            mask = imread(pieces_path.parent / p["mask_path"], cv2.IMREAD_GRAYSCALE)
++            require(mask.shape == rgba.shape[:2], f"{id_}: mask size differs from PNG")
++            rgba[:, :, 3] = np.minimum(mask, rgba[:, :, 3])
++        require(np.any(rgba[:, :, 3]), f"{id_}: empty alpha/mask")
++        a = placements[id_]
++        source_id = None
++        confidence = None
++        status = a.get("status", "accepted")
++        require(
++            status in {"accepted", "review"}, f"{id_}: unusable match status {status}"
++        )
++        if mode == "geometry_placements":
++            base = base_vertices(p)
++            origin = finite_array(a["origin"], (2,), f"{id_}.origin")
++            angle = float(a["rotationDeg"])
++            require(math.isfinite(angle), f"{id_}: nonfinite rotation")
++            theta = math.radians(angle)
++            pose = np.array(
++                [
++                    [math.cos(theta), -math.sin(theta), origin[0]],
++                    [math.sin(theta), math.cos(theta), origin[1]],
++                    [0, 0, 1],
++                ]
++            )
++            h = pose @ image_to_base(p, base)
++            target = transform(pose, base)
++        else:
++            source_id = a["source_piece_id"]
++            target = polygon(
++                sources[source_id]["polygon_px"], f"{source_id}.polygon_px"
++            )
++            keys = [
++                k
++                for k in (
++                    "homography_piece_to_source",
++                    "H_piece_to_source",
++                    "H_scan_to_source",
++                )
++                if k in a
++            ]
++            require(
++                len(keys) == 1, f"{id_}: provide exactly one supported homography field"
++            )
++            h = matrix(a[keys[0]], f"{id_}.{keys[0]}")
++            frame = a.get("transform_source_frame", "piece_image_px")
++            require(
++                frame in {"piece_image_px", "rectified_px"},
++                f"{id_}: invalid transform_source_frame",
++            )
++            if frame == "rectified_px":
++                h = h @ np.linalg.inv(
++                    matrix(p["rectified_to_piece_matrix"], "rectified_to_piece_matrix")
++                )
++            if a.get("confidence") is not None:
++                confidence = float(a["confidence"])
++                require(
++                    math.isfinite(confidence) and 0 <= confidence <= 1,
++                    f"{id_}: invalid confidence",
++                )
++        # Check orientation on the actual opaque support, not transparent padding.
++        hull = cv2.convexHull(
++            cv2.findNonZero((rgba[:, :, 3] > 0).astype(np.uint8))
++        ).reshape(-1, 2)
++        mapped = polygon(transform(h, hull), f"{id_}.warped_support")
++        require(
++            signed_area(mapped) * signed_area(hull) > 0, f"{id_}: mirrored transform"
++        )
++        require(
++            Polygon(mapped).intersection(Polygon(target)).area > 0,
++            f"{id_}: texture does not meet target polygon",
++        )
++        if (
++            p.get("needs_manual_review")
++            or id_ in manifest.get("manual_review", [])
++            or status == "review"
++        ):
++            warnings.append(f"{id_}: upstream manual review required.")
++        fragments.append(
++            Fragment(id_, p, rgba, h, target, source_id, confidence, status)
++        )
++    return manifest, result, fragments, tuple(rect), mode, warnings
++
++
++def board_rotation(
++    angle: int, rect: tuple[float, float]
++) -> tuple[np.ndarray, tuple[float, float]]:
++    w, h = rect
++    rotations = {
++        0: (np.eye(3), (w, h)),
++        90: (np.array([[0, -1, h], [1, 0, 0], [0, 0, 1]], float), (h, w)),
++        180: (np.array([[-1, 0, w], [0, -1, h], [0, 0, 1]], float), (w, h)),
++        270: (np.array([[0, 1, 0], [-1, 0, w], [0, 0, 1]], float), (h, w)),
++    }
++    return rotations[angle]
++
++
++def warp_fragment(
++    fragment: Fragment, size: tuple[int, int], config: dict
++) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
++    alpha = fragment.rgba[:, :, 3].astype(np.float32) / 255
++    if config["edge_erode_px"]:
++        r = config["edge_erode_px"]
++        alpha = cv2.erode(
++            alpha,
++            np.ones((2 * r + 1, 2 * r + 1), np.uint8),
++            borderType=cv2.BORDER_CONSTANT,
++            borderValue=0,
++        )
++    # Premultiplied interpolation prevents transparent black contaminating edges.
++    premul = fragment.rgba[:, :, :3].astype(np.float32) * alpha[:, :, None]
++    warped_alpha = cv2.warpPerspective(alpha, fragment.h, size, flags=cv2.INTER_LINEAR)
++    premul = cv2.warpPerspective(premul, fragment.h, size, flags=cv2.INTER_LINEAR)
++    color = premul / np.maximum(warped_alpha[:, :, None], 1e-7)
++    alpha = warped_alpha * (mask_polygon(fragment.target, size) > 0)
++    weight = alpha.copy()
++    if config["blend_mode"] == "feather" and config["feather_px"] > 0:
++        support = (alpha > 1e-3).astype(np.uint8)
++        padded = np.pad(support, 1)
++        distance = cv2.distanceTransform(padded, cv2.DIST_L2, 3)[1:-1, 1:-1]
++        weight *= np.clip(distance / config["feather_px"], 0.05, 1)
++    return color, alpha, weight
++
++
++def finish(accumulator: np.ndarray, weight: np.ndarray) -> np.ndarray:
++    return np.clip(
++        np.rint(accumulator / np.maximum(weight[:, :, None], 1e-7)), 0, 255
++    ).astype(np.uint8)
++
++
++def render_raw(
++    fragments: list[Fragment], rect: tuple[float, float], config: dict
++) -> tuple[np.ndarray, np.ndarray]:
++    size = tuple(math.ceil(v) for v in rect)
++    acc = np.zeros((size[1], size[0], 3), np.float32)
++    weights = np.zeros((size[1], size[0]), np.float32)
++    for f in fragments:
++        color, _, weight = warp_fragment(f, size, config)
++        acc += color * weight[:, :, None]
++        weights += weight
++    return finish(acc, weights), weights > 1e-3
++
++
++def choose_orientation(
++    fragments: list[Fragment],
++    rect: tuple[float, float],
++    reference: np.ndarray | None,
++    config: dict,
++    orientation: str,
++) -> tuple[int, dict]:
++    if orientation != "auto":
++        return int(orientation), {"method": "explicit", "candidates": []}
++    if reference is None:
++        return 0, {"method": "preserve_solver_no_reference", "candidates": []}
++    raw, covered = render_raw(fragments, rect, config)
++    candidates = []
++    # Compare only global quarter turns. Never move pieces relative to one another.
++    for angle in (0, 90, 180, 270):
++        image = np.rot90(raw, -(angle // 90))
++        support = np.rot90(covered, -(angle // 90))
++        ratio_error = abs(
++            math.log(
++                (image.shape[1] / image.shape[0])
++                / (reference.shape[1] / reference.shape[0])
++            )
++        )
++        if ratio_error > 0.08:
++            continue
++        size = (
++            max(8, round(400 * image.shape[1] / max(image.shape[:2]))),
++            max(8, round(400 * image.shape[0] / max(image.shape[:2]))),
++        )
++        a = cv2.cvtColor(cv2.resize(image, size), cv2.COLOR_BGR2GRAY).astype(float)
++        b = cv2.cvtColor(cv2.resize(reference, size), cv2.COLOR_BGR2GRAY).astype(float)
++        valid = (
++            cv2.resize(support.astype(np.uint8), size, interpolation=cv2.INTER_NEAREST)
++            > 0
++        )
++        av, bv = a[valid], b[valid]
++        score = (
++            float(np.corrcoef(av, bv)[0, 1])
++            if len(av) > 10 and av.std() > 1e-5 and bv.std() > 1e-5
++            else None
++        )
++        candidates.append({"clockwise_deg": angle, "gray_correlation": score})
++    usable = [c for c in candidates if c["gray_correlation"] is not None]
++    chosen = (
++        max(usable, key=lambda c: c["gray_correlation"])["clockwise_deg"]
++        if usable
++        else 0
++    )
++    scores = sorted((c["gray_correlation"] for c in usable), reverse=True)
++    return chosen, {
++        "method": "reference_gray_correlation",
++        "candidates": candidates,
++        "ambiguous": len(scores) < 2 or scores[0] < 0.4 or scores[0] - scores[1] < 0.05,
++    }
++
++
++def color_correct(
++    color: np.ndarray, reference: np.ndarray | None, alpha: np.ndarray, config: dict
++) -> tuple[np.ndarray, dict]:
++    if reference is None or not config["color_correction"]:
++        return color, {
++            "applied": False,
++            "reason": "no_reference" if reference is None else "disabled",
++        }
++    valid = (alpha > 0.99).astype(np.uint8)
++    r = config["color_sample_erode_px"]
++    if r:
++        valid = cv2.erode(
++            valid,
++            np.ones((2 * r + 1, 2 * r + 1), np.uint8),
++            borderType=cv2.BORDER_CONSTANT,
++            borderValue=0,
++        )
++    valid = valid > 0
++    if valid.sum() < 32:
++        return color, {"applied": False, "reason": "insufficient_interior_samples"}
++    lab = cv2.cvtColor(np.clip(color / 255, 0, 1).astype(np.float32), cv2.COLOR_BGR2Lab)
++    target = cv2.cvtColor(reference.astype(np.float32) / 255, cv2.COLOR_BGR2Lab)
++    src_mean, src_std = lab[valid].mean(axis=0), lab[valid].std(axis=0)
++    dst_mean, dst_std = target[valid].mean(axis=0), target[valid].std(axis=0)
++    # Low variance is not evidence for a huge contrast increase.
++    gain = np.where(src_std > 0.5, dst_std / np.maximum(src_std, 0.5), 1.0)
++    gain = np.clip(gain, *config["color_gain_limits"])
++    strength = config["color_strength"]
++    gain = 1 + strength * (gain - 1)
++    offset = strength * np.clip(
++        dst_mean - src_mean, -config["color_max_offset"], config["color_max_offset"]
++    )
++    lab = (lab - src_mean) * gain + src_mean + offset
++    lab[:, :, 0] = np.clip(lab[:, :, 0], 0, 100)
++    lab[:, :, 1:] = np.clip(lab[:, :, 1:], -127, 127)
++    corrected = cv2.cvtColor(lab, cv2.COLOR_Lab2BGR) * 255
++    return corrected, {
++        "applied": True,
++        "sample_pixels": int(valid.sum()),
++        "source_mean_Lab": src_mean.tolist(),
++        "target_mean_Lab": dst_mean.tolist(),
++        "source_std_Lab": src_std.tolist(),
++        "target_std_Lab": dst_std.tolist(),
++        "gain": gain.tolist(),
++        "mean_shift_Lab": offset.tolist(),
++        "strength": strength,
++    }
++
++
++def shared_edge_length(a: np.ndarray, b: np.ndarray, tolerance: float) -> float:
++    """Length of near-parallel shared sides; corner-only contact is not adjacency."""
++    length = 0.0
++    for p, q in zip(a, np.roll(a, -1, axis=0)):
++        u = q - p
++        la = np.linalg.norm(u)
++        if la <= 1e-9:
++            continue
++        u /= la
++        n = np.array([-u[1], u[0]])
++        for s, t in zip(b, np.roll(b, -1, axis=0)):
++            v = t - s
++            lb = np.linalg.norm(v)
++            if lb <= 1e-9 or abs(np.dot(u, v / lb)) < math.cos(math.radians(8)):
++                continue
++            x0, x1 = sorted([np.dot(s - p, u), np.dot(t - p, u)])
++            lo, hi = max(0, x0), min(la, x1)
++            if hi - lo < max(1, tolerance * 2):
++                continue
++            # Check separation at both ends of the overlapping projected interval.
++            xs, xt = np.dot(s - p, u), np.dot(t - p, u)
++            ys, yt = np.dot(s - p, n), np.dot(t - p, n)
++            distances = [ys + (yt - ys) * (x - xs) / (xt - xs) for x in (lo, hi)]
++            if max(abs(d) for d in distances) <= tolerance + 1e-6:
++                length += hi - lo
++    return length
++
++
++def placement_order(
++    fragments: list[Fragment], tolerance: float
++) -> tuple[list[Fragment], dict, set[str]]:
++    edges = {}
++    for i, a in enumerate(fragments):
++        for b in fragments[i + 1 :]:
++            length = shared_edge_length(a.target, b.target, tolerance)
++            if length > 0:
++                edges[tuple(sorted((a.id, b.id)))] = length
++    centers = {f.id: Polygon(f.target).centroid for f in fragments}
++    remaining = {f.id: f for f in fragments}
++    first = min(
++        fragments,
++        key=lambda f: (
++            Polygon(f.target).distance(Point(0, 0)),
++            centers[f.id].y,
++            centers[f.id].x,
++            f.id,
++        ),
++    )
++    ordered = [remaining.pop(first.id)]
++    component_starts = {first.id}
++    while remaining:
++        weights = {
++            id_: sum(edges.get(tuple(sorted((id_, p.id))), 0) for p in ordered)
++            for id_ in remaining
++        }
++        id_ = min(remaining, key=lambda k: (-weights[k], centers[k].y, centers[k].x, k))
++        if weights[id_] == 0:
++            component_starts.add(id_)
++        ordered.append(remaining.pop(id_))
++    return ordered, edges, component_starts
++
++
++def geometry_report(fragments: list[Fragment], rect: tuple[float, float]) -> dict:
++    shapes = [Polygon(f.target) for f in fragments]
++    frame = box(0, 0, *rect)
++    union = unary_union(shapes)
++    total = sum(s.area for s in shapes)
++    missing = frame.difference(union).area
++    overlap = max(0, total - union.area)
++    outside = union.difference(frame).area
++    return {
++        "total_piece_area": total,
++        "rectangle_area": frame.area,
++        "missing_area": missing,
++        "overlap_excess_area": overlap,
++        "outside_area": outside,
++        "coverage_fraction": 1 - missing / frame.area,
++        "score": (missing + overlap + outside) / total,
++        "area_unit": "assembly_px_squared",
++    }
++
++
++def image_metrics(
++    image: np.ndarray,
++    reference: np.ndarray | None,
++    covered: np.ndarray,
++    evaluate_ssim: bool,
++) -> dict:
++    if reference is None:
++        return {"available": False, "reason": "no_reference"}
++    diff = (image.astype(float) - reference.astype(float)) ** 2
++    mse = float(diff.mean())
++    result = {
++        "available": True,
++        "mse": mse,
++        "psnr_db": 10 * math.log10(255**2 / mse) if mse > 0 else None,
++        "identical": mse == 0,
++        "covered_psnr_db": None,
++    }
++    if np.any(covered):
++        covered_mse = float(diff[covered].mean())
++        result["covered_psnr_db"] = (
++            10 * math.log10(255**2 / covered_mse) if covered_mse > 0 else None
++        )
++    side = min(image.shape[:2])
++    if evaluate_ssim and side >= 3:
++        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
++        target = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
++        result["ssim_gray"] = float(
++            structural_similarity(
++                gray,
++                target,
++                data_range=255,
++                win_size=min(7, side if side % 2 else side - 1),
++            )
++        )
++    else:
++        result["ssim_gray"] = None
++    return result
++
++
++def seam_report(
++    image: np.ndarray,
++    reference: np.ndarray | None,
++    fragments: list[Fragment],
++    edges: dict,
++    covered: np.ndarray,
++    tolerance: float,
++) -> list[dict]:
++    lab = cv2.cvtColor(image.astype(np.float32) / 255, cv2.COLOR_BGR2Lab)
++    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
++    gx, gy = (
++        np.gradient(gray)
++        if min(gray.shape) >= 2
++        else (np.zeros_like(gray), np.zeros_like(gray))
++    )
++    grad = np.hypot(gx, gy)
++    ref_lab = (
++        cv2.cvtColor(reference.astype(np.float32) / 255, cv2.COLOR_BGR2Lab)
++        if reference is not None
++        else None
++    )
++    if reference is not None and min(gray.shape) >= 2:
++        rx, ry = np.gradient(
++            cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY).astype(np.float32)
++        )
++        ref_grad = np.hypot(rx, ry)
++    else:
++        ref_grad = None
++    by_id = {f.id: f for f in fragments}
++    output = []
++    for (a, b), length in sorted(edges.items()):
++        pa, pb = Polygon(by_id[a].target), Polygon(by_id[b].target)
++        center = np.array(
++            [pb.centroid.x - pa.centroid.x, pb.centroid.y - pa.centroid.y]
++        )
++        center /= max(np.linalg.norm(center), 1e-9)
++        # Sample either side of A's edge where it is close to B's boundary.
++        points = []
++        for p, q in zip(by_id[a].target, np.roll(by_id[a].target, -1, axis=0)):
++            for t in np.linspace(0.05, 0.95, max(2, int(np.linalg.norm(q - p) / 3))):
++                point = p + t * (q - p)
++                if pb.boundary.distance(Point(point)) <= tolerance + 1e-5:
++                    points.append(point)
++        pairs = []
++        offset = max(2, tolerance + 2)
++        for p in points:
++            u, v = (
++                np.rint(p - center * offset).astype(int),
++                np.rint(p + center * offset).astype(int),
++            )
++            if (
++                all(
++                    0 <= xy[0] < image.shape[1] and 0 <= xy[1] < image.shape[0]
++                    for xy in (u, v)
++                )
++                and covered[u[1], u[0]]
++                and covered[v[1], v[0]]
++                and pa.covers(Point(u))
++                and pb.covers(Point(v))
++            ):
++                pairs.append((u, v))
++        row = {
++            "piece_a": a,
++            "piece_b": b,
++            "shared_edge_length_px": length,
++            "sample_pairs": len(pairs),
++            "mean_color_difference_deltaE76": None,
++            "mean_gradient_difference": None,
++            "reference_color_difference_deltaE76": None,
++            "gradient_residual_vs_reference": None,
++        }
++        if pairs:
++            uv = np.asarray(pairs)
++            x1, y1, x2, y2 = uv[:, 0, 0], uv[:, 0, 1], uv[:, 1, 0], uv[:, 1, 1]
++            row["mean_color_difference_deltaE76"] = float(
++                np.linalg.norm(lab[y1, x1] - lab[y2, x2], axis=1).mean()
++            )
++            row["mean_gradient_difference"] = float(
++                np.abs(grad[y1, x1] - grad[y2, x2]).mean()
++            )
++            if ref_lab is not None:
++                row["reference_color_difference_deltaE76"] = float(
++                    np.linalg.norm(ref_lab[y1, x1] - ref_lab[y2, x2], axis=1).mean()
++                )
++            if ref_grad is not None:
++                row["gradient_residual_vs_reference"] = float(
++                    (
++                        np.abs(grad[y1, x1] - ref_grad[y1, x1])
++                        + np.abs(grad[y2, x2] - ref_grad[y2, x2])
++                    ).mean()
++                    / 2
++                )
++        output.append(row)
++    return output
++
++
++def label(
++    image: np.ndarray, text: str, at: tuple[int, int], scale: float = 0.65
++) -> None:
++    x, y = at
++    (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
++    x, y = (
++        max(0, min(x - w // 2, image.shape[1] - w - 2)),
++        max(h + 3, min(y, image.shape[0] - 3)),
++    )
++    cv2.rectangle(image, (x, y - h - 3), (x + w + 2, y + 3), (250, 250, 250), -1)
++    cv2.putText(
++        image,
++        text,
++        (x + 1, y),
++        cv2.FONT_HERSHEY_SIMPLEX,
++        scale,
++        (30, 30, 30),
++        2,
++        cv2.LINE_AA,
++    )
++
++
++def save_json(path: Path, value: Any) -> None:
++    # RFC-compliant output: NaN and Infinity are never serialized.
++    path.write_text(
++        json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
++        encoding="utf-8",
++    )
++
++
++def manual_plan(
++    fragments: list[Fragment],
++    edges: dict,
++    component_starts: set,
++    rect: tuple[float, float],
++    manifest: dict,
++    mode: str,
++    warnings: list[str],
++) -> dict:
++    density = manifest.get("px_per_mm")
++    mm_scale = None
++    if mode == "geometry_placements" and density is not None:
++        d = np.asarray(density, float)
++        if (
++            d.shape == (2,)
++            and np.isfinite(d).all()
++            and np.all(d > 0)
++            and abs(d[0] - d[1]) < 1e-6
++        ):
++            mm_scale = float(1 / d[0])
++    slots = []
++    placed = []
++    for index, f in enumerate(fragments, 1):
++        neighbors = [p for p in placed if tuple(sorted((p, f.id))) in edges]
++        center = Polygon(f.target).centroid
++        h = f.h.copy()
++        table_rotation = None
++        table_transform = None
++        if "rectified_to_piece_matrix" in f.metadata:
++            table_transform = h @ matrix(
++                f.metadata["rectified_to_piece_matrix"], "rectified_to_piece_matrix"
++            )
++            xy = np.asarray(f.metadata.get("center_px", [0, 0]), float)
++            sample = transform(table_transform, np.array([xy, xy + [1, 0]]))
++            delta = sample[1] - sample[0]
++            table_rotation = (
++                math.degrees(math.atan2(delta[1], delta[0])) + 180
++            ) % 360 - 180
++        row = {
++            "step": index,
++            "scan_piece_id": f.id,
++            "source_piece_id": f.source_id,
++            "target_polygon_px": f.target.tolist(),
++            "target_center_px": [center.x, center.y],
++            "homography_piece_to_source": (h / h[2, 2]).tolist()
++            if abs(h[2, 2]) > 1e-12
++            else h.tolist(),
++            "H_rectified_to_assembly": table_transform.tolist()
++            if table_transform is not None
++            else None,
++            "rotation_deg": table_rotation,
++            "rotation_frame": "rectified_table_to_assembly_clockwise"
++            if table_rotation is not None
++            else "unavailable",
++            "scan_center_rectified_px": f.metadata.get("center_px"),
++            "scan_polygon_rectified_px": f.metadata.get("corners_px"),
++            "align_with_placed_pieces": neighbors,
++            "start_new_component": f.id in component_starts,
++            "confidence": f.confidence,
++            "extraction_quality": f.metadata.get("quality"),
++            "needs_manual_review": bool(
++                f.metadata.get("needs_manual_review")
++                or f.id in manifest.get("manual_review", [])
++                or f.match_status == "review"
++            ),
++            "step_image": f"steps/{index:02d}.png",
++        }
++        if mm_scale is not None:
++            row["target_polygon_mm"] = (f.target * mm_scale).tolist()
++            row["target_center_mm"] = [center.x * mm_scale, center.y * mm_scale]
++        slots.append(row)
++        placed.append(f.id)
++    return {
++        "schema_version": "1.0",
++        "algorithm_version": VERSION,
++        "session_id": manifest.get("session_id"),
++        "coordinate_system": "assembly_px",
++        "source_coordinate_system": "rectified_px",
++        "axes": "origin at target board top-left; x right, y down; positive rotation clockwise",
++        "rectangle_px": list(rect),
++        "rectangle_mm": [v * mm_scale for v in rect] if mm_scale is not None else None,
++        "mm_per_assembly_px": mm_scale,
++        "execution": "manual",
++        "order_strategy": "top-left anchor, then largest total shared edge with placed pieces",
++        "warnings": warnings,
++        "slot": slots,
++    }
++
++
++def write_guide(
++    output: Path,
++    plan: dict,
++    fragments: list[Fragment],
++    manifest: dict,
++    pieces_path: Path,
++) -> None:
++    rows = [
++        "# 人工摆放计划",
++        "",
++        "在空白区域建立目标外框：左上角为原点，x 向右、y 向下。按顺序图及下表逐片摆放。",
++        "目标外框的坐标轴与原俯视图坐标轴保持平行；若整体转动外框，表内转角还须叠加该转角。",
++        "旋转角以原始俯视照片中该片的朝向为起点；正值顺时针，负值逆时针。先核对取片图中的 S 编号。",
++        "原照片中的碎片若已被移动或转动，请重新核对朝向；PNG 的基边方向不是桌面原朝向。",
++        "",
++    ]
++    if plan["rectangle_mm"]:
++        rows += [
++            f"目标外框约 {plan['rectangle_mm'][0]:.2f} × {plan['rectangle_mm'][1]:.2f} mm；毫米坐标只表示该外框内的相对位置。",
++            "",
++        ]
++    if plan["warnings"]:
++        rows += ["待复核事项：", ""] + [f"- {w}" for w in plan["warnings"]] + [""]
++    rows += [
++        "![取片索引](piece_index.png)",
++        "",
++        "![目标顺序](placement_order.png)",
++        "",
++        "| 步骤 | 取片 | 从原桌面朝向旋转 | 目标中心 (px) | 对齐已放碎片 | 复核 |",
++        "| --- | --- | --- | --- | --- | --- |",
++    ]
++    for slot in plan["slot"]:
++        angle = slot["rotation_deg"]
++        rotation = (
++            "缺少原朝向，请看图核对"
++            if angle is None
++            else f"{'顺时针' if angle >= 0 else '逆时针'} {abs(angle):.2f}°"
++        )
++        xy = slot["target_center_px"]
++        step_label = (
++            f"[{slot['step']}]({slot['step_image']})"
++            if slot["step_image"]
++            else str(slot["step"])
++        )
++        rows.append(
++            f"| {step_label} | {slot['scan_piece_id']} | {rotation} | ({xy[0]:.1f}, {xy[1]:.1f}) | {', '.join(slot['align_with_placed_pieces']) or '建立锚点'} | {'需要' if slot['needs_manual_review'] else '—'} |"
++        )
++    rows += [
++        "",
++        "角度来自图像平面内的变换；透视单应时，它只是中心附近的近似朝向。不要用数字拼接中的缩放或颜色校正调整实物片形。",
++        "",
++        "黑色缺口是未覆盖区域。参考图只用于整图朝向选择、颜色统计和评价，没有拿原图像素填补缺口。",
++        "",
++    ]
++    cells = []
++    for index, f in enumerate(fragments, 1):
++        rgba = f.rgba
++        scale = min(230 / rgba.shape[1], 150 / rgba.shape[0])
++        small = cv2.resize(
++            rgba,
++            (
++                max(1, round(rgba.shape[1] * scale)),
++                max(1, round(rgba.shape[0] * scale)),
++            ),
++        )
++        cell = np.full((190, 250, 3), 228, np.uint8)
++        a = small[:, :, 3:4].astype(float) / 255
++        x, y = (250 - small.shape[1]) // 2, 10
++        cell[y : y + small.shape[0], x : x + small.shape[1]] = (
++            small[:, :, :3] * a + 228 * (1 - a)
++        ).astype(np.uint8)
++        label(cell, f"{index:02d}: {f.id}", (125, 180))
++        cells.append(cell)
++    while len(cells) % 4:
++        cells.append(np.full_like(cells[0], 255))
++    imwrite(
++        output / "piece_index.png",
++        np.vstack([np.hstack(cells[i : i + 4]) for i in range(0, len(cells), 4)]),
++    )
++    # Original table positions identify which physical piece to pick.
++    capture = manifest.get("inputs", {}).get("pieces_rectified")
++    if capture:
++        path = Path(capture)
++        if not path.is_absolute():
++            candidate = pieces_path.parent / path
++            path = candidate if candidate.is_file() else ROOT / path
++        if path.is_file():
++            table = imread(path)
++            for f in fragments:
++                if f.metadata.get("center_px"):
++                    label(
++                        table,
++                        f.id,
++                        tuple(round(v) for v in f.metadata["center_px"]),
++                        0.9,
++                    )
++            imwrite(output / "scan_locations.png", table)
++            rows += ["![原桌面取片位置](scan_locations.png)", ""]
++    (output / "placement_guide.md").write_text("\n".join(rows), encoding="utf-8")
++
++
++def assemble(
++    pieces_path: Path = DEFAULT_PIECES,
++    placements_path: Path = DEFAULT_PLACEMENTS,
++    output: Path = DEFAULT_OUTPUT,
++    *,
++    layout_path: Path | None = None,
++    reference_path: Path | None = None,
++    config: dict | None = None,
++    orientation: str = "auto",
++) -> dict:
++    pieces_path, placements_path, output = (
++        Path(pieces_path),
++        Path(placements_path),
++        Path(output),
++    )
++    require(orientation in {"auto", "0", "90", "180", "270"}, "invalid orientation")
++    config = resolve_config(config)
++    manifest, result, fragments, rect, mode, warnings = load_inputs(
++        pieces_path, placements_path, layout_path, config
++    )
++    reference = imread(reference_path) if reference_path is not None else None
++    if mode == "reference_assignments":
++        require(
++            orientation in {"auto", "0"},
++            "assignment targets are already in the reference frame; orientation must be 0",
++        )
++        if reference is not None:
++            require(
++                list(reference.shape[1::-1]) == list(rect),
++                "reference dimensions differ from layout.source_size_px",
++            )
++        angle, orientation_report = (
++            0,
++            {"method": "reference_assignments", "candidates": []},
++        )
++    else:
++        angle, orientation_report = choose_orientation(
++            fragments, rect, reference, config, orientation
++        )
++    global_h, rect = board_rotation(angle, rect)
++    for f in fragments:
++        f.h = global_h @ f.h
++        f.target = transform(global_h, f.target)
++    if orientation_report.get("ambiguous"):
++        warnings.append(
++            "Reference does not confidently resolve global orientation; check placement_order.png."
++        )
++    size = tuple(math.ceil(v) for v in rect)
++    ref_original_size = list(reference.shape[1::-1]) if reference is not None else None
++    if reference is not None:
++        require(
++            abs(
++                math.log(
++                    (rect[0] / rect[1]) / (reference.shape[1] / reference.shape[0])
++                )
++            )
++            < 0.08,
++            "reference / assembly aspect ratios differ; check orientation or reference",
++        )
++        reference = cv2.resize(
++            reference,
++            size,
++            interpolation=cv2.INTER_AREA
++            if reference.shape[1] > size[0]
++            else cv2.INTER_LINEAR,
++        )
++    fragments, edges, components = placement_order(
++        fragments, config["adjacency_tolerance_px"]
++    )
++    if len(components) > 1:
++        warnings.append(
++            f"Adjacency graph has {len(components)} components; separate anchors are needed."
++        )
++    # Validate every input before creating or replacing any result file.
++    inputs = {pieces_path.resolve(), placements_path.resolve()}
++    inputs.update(
++        (pieces_path.parent / f.metadata[key]).resolve()
++        for f in fragments
++        for key in ("rgba_path", "mask_path")
++        if f.metadata.get(key)
++    )
++    inputs.update(
++        Path(p).resolve() for p in (reference_path, layout_path) if p is not None
++    )
++    require(
++        not any(p.is_relative_to(output.resolve()) for p in inputs),
++        "output directory must not contain input files",
++    )
++    output.mkdir(parents=True, exist_ok=True)
++    # Remove only products managed by this script, so reruns with --no-steps
++    # or without a reference cannot display stale results from an earlier run.
++    for name in ("comparison.png", "scan_locations.png"):
++        (output / name).unlink(missing_ok=True)
++    steps_dir = output / "steps"
++    if steps_dir.is_dir():
++        for path in steps_dir.glob("*.png"):
++            if path.stem.isdigit():
++                path.unlink()
++        if not config["write_steps"] and not any(steps_dir.iterdir()):
++            steps_dir.rmdir()
++    if config["write_steps"]:
++        (output / "steps").mkdir(exist_ok=True)
++    acc = np.zeros((size[1], size[0], 3), np.float32)
++    raw_acc = np.zeros_like(acc)
++    weights = np.zeros((size[1], size[0]), np.float32)
++    counts = np.zeros(weights.shape, np.uint16)
++    piece_reports = []
++    for index, f in enumerate(fragments, 1):
++        color, alpha, weight = warp_fragment(f, size, config)
++        corrected, correction = color_correct(color, reference, alpha, config)
++        support = alpha > 1e-3
++        counts += support.astype(np.uint16)
++        if config["blend_mode"] == "overwrite":
++            acc[support], raw_acc[support], weights[support] = (
++                corrected[support],
++                color[support],
++                1,
++            )
++        else:
++            acc += corrected * weight[:, :, None]
++            raw_acc += color * weight[:, :, None]
++            weights += weight
++        piece_reports.append(
++            {
++                "scan_piece_id": f.id,
++                "source_piece_id": f.source_id,
++                "match_confidence": f.confidence,
++                "match_status": f.match_status,
++                "extraction_quality": f.metadata.get("quality"),
++                "covered_pixels": int(support.sum()),
++                "color_correction": correction,
++            }
++        )
++        if config["write_steps"]:
++            step = finish(acc, weights)
++            # Labels are guide annotations; final assembled.png has none.
++            for placed in fragments[:index]:
++                cv2.polylines(
++                    step,
++                    [np.rint(placed.target).astype(np.int32)],
++                    True,
++                    (0, 200, 255),
++                    1,
++                    cv2.LINE_AA,
++                )
++            cv2.polylines(
++                step,
++                [np.rint(f.target).astype(np.int32)],
++                True,
++                (40, 255, 40),
++                3,
++                cv2.LINE_AA,
++            )
++            c = Polygon(f.target).centroid
++            label(step, f"{index:02d}: {f.id}", (round(c.x), round(c.y)))
++            imwrite(output / f"steps/{index:02d}.png", step)
++    assembled, raw = finish(acc, weights), finish(raw_acc, weights)
++    covered = counts > 0
++    overview = assembled.copy()
++    seams = assembled.copy()
++    for index, f in enumerate(fragments, 1):
++        contour = np.rint(f.target).astype(np.int32)
++        cv2.polylines(overview, [contour], True, (0, 200, 255), 2, cv2.LINE_AA)
++        cv2.polylines(seams, [contour], True, (0, 200, 255), 1, cv2.LINE_AA)
++        c = Polygon(f.target).centroid
++        label(overview, f"{index:02d}: {f.id}", (round(c.x), round(c.y)))
++    seams[~covered] = (180, 0, 255)
++    seams[counts > 1] = (255, 255, 0)
++    for name, image in {
++        "assembled.png": assembled,
++        "assembled_raw.png": raw,
++        "seams.png": seams,
++        "coverage_mask.png": covered.astype(np.uint8) * 255,
++        "placement_order.png": overview,
++    }.items():
++        imwrite(output / name, image)
++    plan = manual_plan(fragments, edges, components, rect, manifest, mode, warnings)
++    if not config["write_steps"]:
++        for slot in plan["slot"]:
++            slot["step_image"] = None
++    save_json(output / "placement_plan.json", plan)
++    write_guide(output, plan, fragments, manifest, pieces_path)
++    if reference is not None:
++        panels = []
++        for title, image in (
++            ("Reference (resized)", reference),
++            ("Raw reconstruction", raw),
++            ("Color corrected", assembled),
++        ):
++            factor = min(1, 720 / image.shape[1])
++            small = cv2.resize(
++                image,
++                (
++                    round(image.shape[1] * factor),
++                    max(1, round(image.shape[0] * factor)),
++                ),
++            )
++            panel = cv2.copyMakeBorder(
++                small, 40, 0, 0, 0, cv2.BORDER_CONSTANT, value=(255, 255, 255)
++            )
++            label(panel, title, (panel.shape[1] // 2, 28))
++            panels.append(panel)
++        imwrite(output / "comparison.png", np.hstack(panels))
++    report = {
++        "schema_version": "1.0",
++        "algorithm_version": VERSION,
++        "session_id": manifest.get("session_id"),
++        "input_mode": mode,
++        "status": "review" if warnings else "complete",
++        "warnings": warnings,
++        "piece_count": len(fragments),
++        "coordinate_system": "assembly_px",
++        "rectangle_px": list(rect),
++        "canvas_size_px": list(size),
++        "board_rotation_clockwise_deg": angle,
++        "H_solver_to_assembly": global_h.tolist(),
++        "orientation": orientation_report,
++        "reference_used": {
++            "pixels_for_gap_filling": False,
++            "global_orientation": orientation_report["method"]
++            == "reference_gray_correlation",
++            "color_statistics": reference is not None and config["color_correction"],
++            "evaluation": reference is not None,
++            "original_size_px": ref_original_size,
++            "resized_size_px": list(size) if reference is not None else None,
++        },
++        "inputs": {
++            "pieces_sha256": hashlib.sha256(pieces_path.read_bytes()).hexdigest(),
++            "placements_sha256": hashlib.sha256(
++                placements_path.read_bytes()
++            ).hexdigest(),
++        },
++        "geometry": geometry_report(fragments, rect),
++        "raster": {
++            "covered_fraction": float(covered.mean()),
++            "uncovered_pixels": int((~covered).sum()),
++            "overlap_pixels": int((counts > 1).sum()),
++        },
++        "metrics": {
++            "raw": image_metrics(raw, reference, covered, config["evaluate_ssim"]),
++            "corrected": image_metrics(
++                assembled, reference, covered, config["evaluate_ssim"]
++            ),
++        },
++        "seams": seam_report(
++            assembled,
++            reference,
++            fragments,
++            edges,
++            covered,
++            config["adjacency_tolerance_px"],
++        ),
++        "seam_legend": {
++            "yellow": "polygon boundary",
++            "magenta": "uncovered pixel",
++            "cyan": "overlapping textures",
++        },
++        "upstream_geometry_quality": result.get("quality"),
++        "upstream_verification": result.get("verification"),
++        "pieces": piece_reports,
++        "config": config,
++    }
++    save_json(output / "assembly_report.json", report)
++    return report
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument(
++        "--pieces",
++        type=Path,
++        default=DEFAULT_PIECES,
++        help="Stage 2 full pieces.json (paths relative to this file)",
++    )
++    parser.add_argument(
++        "--placements",
++        "--assignments",
++        dest="placements",
++        type=Path,
++        default=DEFAULT_PLACEMENTS,
++        help="Stage 3 placements or assignments JSON",
++    )
++    parser.add_argument(
++        "--layout", type=Path, help="Stage 1 layout, required for assignments"
++    )
++    parser.add_argument(
++        "--reference",
++        type=Path,
++        help="optional reference for orientation, conservative color correction, SSIM/PSNR",
++    )
++    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
++    parser.add_argument("--config", type=Path)
++    parser.add_argument(
++        "--orientation",
++        choices=["auto", "0", "90", "180", "270"],
++        default="auto",
++        help="global clockwise turn; auto uses reference if provided",
++    )
++    parser.add_argument("--no-color-correction", action="store_true")
++    parser.add_argument("--no-steps", action="store_true")
++    args = parser.parse_args(argv)
++    try:
++        config = read_json(args.config) if args.config else {}
++        if args.no_color_correction:
++            config["color_correction"] = False
++        if args.no_steps:
++            config["write_steps"] = False
++        report = assemble(
++            args.pieces,
++            args.placements,
++            args.output,
++            layout_path=args.layout,
++            reference_path=args.reference,
++            config=config,
++            orientation=args.orientation,
++        )
++        print(
++            f"Assembled {report['piece_count']} pieces: {report['canvas_size_px']} px; status={report['status']}"
++        )
++        print(
++            f"Geometry coverage: {report['geometry']['coverage_fraction']:.6%}; raster coverage: {report['raster']['covered_fraction']:.6%}"
++        )
++        print(f"Output: {args.output}")
++        for warning in report["warnings"]:
++            print(f"Review: {warning}")
++        return (
++            1 if report["warnings"] and report["config"]["fail_on_manual_review"] else 0
++        )
++    except (
++        ValueError,
++        KeyError,
++        TypeError,
++        OSError,
++        cv2.error,
++        np.linalg.LinAlgError,
++    ) as exc:
++        print(f"Stage 4 failed: {exc}", file=sys.stderr)
++        return 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/stage4_assembly/config/assembly.example.json b/stage4_assembly/config/assembly.example.json
+index f4ff294..fa8b4f5 100644
+--- a/stage4_assembly/config/assembly.example.json
++++ b/stage4_assembly/config/assembly.example.json
+@@ -2,8 +2,17 @@
+   "schema_version": "1.0",
+   "color_space": "Lab",
+   "color_correction": true,
++  "color_strength": 0.5,
++  "color_gain_limits": [0.8, 1.25],
++  "color_max_offset": 10.0,
++  "color_sample_erode_px": 3,
+   "blend_mode": "feather",
+   "feather_px": 3,
+-  "evaluate_ssim": true
++  "edge_erode_px": 0,
++  "evaluate_ssim": true,
++  "adjacency_tolerance_px": 8.0,
++  "write_steps": true,
++  "fail_on_manual_review": false,
++  "max_canvas_pixels": 25000000
+ }
+ 
+diff --git a/stage4_assembly/input/README.md b/stage4_assembly/input/README.md
+index 2deee0c..35d984f 100644
+--- a/stage4_assembly/input/README.md
++++ b/stage4_assembly/input/README.md
+@@ -1,9 +1,12 @@
+ # Stage 4 input
+ 
+-放入：
++默认直接读取仓库中 Stage 2/3 的输出，不要求复制到本目录。
+ 
+-- `jigsaw_layout.json`
+-- `reference.png`
+-- 阶段二 RGBA/mask
+-- 阶段三 `assignments.json`
++独立交接时携带完整 `pieces.json` 及其 `rgba_path/mask_path` 指向的图像，
++保持这些路径相对于 `pieces.json` 所在目录。
++另携带 Stage 3 的几何 `placements` 结果，通过 `--pieces/--placements` 指定。
++
++若使用早期参考图分配协议，携带 `assignments.json`、`jigsaw_layout.json`，
++通过 `--assignments/--layout` 指定。参考图为可选 `--reference`，用于朝向、校色与评价。
++只给 `pieces_base_edge.json` 无法渲染真实纹理，因为它没有图像与裁剪坐标信息。
+ 
+diff --git a/stage4_assembly/output/README.md b/stage4_assembly/output/README.md
+index 5a59499..eb8f8fe 100644
+--- a/stage4_assembly/output/README.md
++++ b/stage4_assembly/output/README.md
+@@ -1,4 +1,19 @@
+ # Stage 4 output
+ 
+-最终重建图、接缝图和指标报告都写在这里。输出必须可追溯到阶段三的 `assignments.json`。
++此目录保存仓库现有 16 块实拍碎片的重建示例，可按上一级 README 的命令重新生成。
++
++| 文件 | 内容 |
++| --- | --- |
++| `assembled.png` / `assembled_raw.png` | 保守校色版 / 未校色版 |
++| `assembly_report.json` | 输入摘要、配置、几何/栅格覆盖、SSIM、PSNR、逐片与接缝指标 |
++| `comparison.png` | 参考图、未校色、校色版并排，仅有参考图时生成 |
++| `seams.png` / `coverage_mask.png` | 黄边为多边形边界、洋红为缺口、青色为重叠；覆盖白、空缺黑 |
++| `placement_plan.json` | 供人工逐片执行的坐标/角度/邻片计划 |
++| `placement_guide.md` | 中文操作表和步骤图片链接 |
++| `placement_order.png` / `piece_index.png` | 目标顺序总览 / 碎片正面取片索引 |
++| `scan_locations.png` | 原桌面 S 编号位置，原俯视图可读时生成 |
++| `steps/01.png..16.png` | 每一步增加一块，绿边为当前碎片 |
++
++样本报告 `status=review` 是预期：上游近似解、S06 人工复核项仍然存在。
++参考图没有用于缺口填充。输出可追溯到 Stage 2 和 Stage 3 JSON 的 SHA256。
+ 
+diff --git a/stage4_assembly/output/assembly_report.json b/stage4_assembly/output/assembly_report.json
+new file mode 100644
+index 0000000..370c3ba
+--- /dev/null
++++ b/stage4_assembly/output/assembly_report.json
+@@ -0,0 +1,1101 @@
++{
++  "schema_version": "1.0",
++  "algorithm_version": "stage4-assembly-1.0.0",
++  "session_id": "9ab5743b5eec79a1",
++  "input_mode": "geometry_placements",
++  "status": "review",
++  "warnings": [
++    "Stage 3 layout is approximate; gaps, overlaps and boundary errors remain.",
++    "S06: upstream manual review required."
++  ],
++  "piece_count": 16,
++  "coordinate_system": "assembly_px",
++  "rectangle_px": [
++    2027.0166229464926,
++    1142.9549737845618
++  ],
++  "canvas_size_px": [
++    2028,
++    1143
++  ],
++  "board_rotation_clockwise_deg": 180,
++  "H_solver_to_assembly": [
++    [
++      -1.0,
++      0.0,
++      2027.0166229464926
++    ],
++    [
++      0.0,
++      -1.0,
++      1142.9549737845618
++    ],
++    [
++      0.0,
++      0.0,
++      1.0
++    ]
++  ],
++  "orientation": {
++    "method": "reference_gray_correlation",
++    "candidates": [
++      {
++        "clockwise_deg": 0,
++        "gray_correlation": -0.31697281338423655
++      },
++      {
++        "clockwise_deg": 180,
++        "gray_correlation": 0.9275565950773689
++      }
++    ],
++    "ambiguous": false
++  },
++  "reference_used": {
++    "pixels_for_gap_filling": false,
++    "global_orientation": true,
++    "color_statistics": true,
++    "evaluation": true,
++    "original_size_px": [
++      1280,
++      720
++    ],
++    "resized_size_px": [
++      2028,
++      1143
++    ]
++  },
++  "inputs": {
++    "pieces_sha256": "5819edc5f4ae264879016939443f648c3b81836e4e7a74eeccc91c6436c3f3bf",
++    "placements_sha256": "aa3a2bda241fd50effb828e0575a6501f33a3e73252c2af871fe09d22c3cbbcf"
++  },
++  "geometry": {
++    "total_piece_area": 2313709.6838089526,
++    "rectangle_area": 2316788.7311406797,
++    "missing_area": 12821.73825195993,
++    "overlap_excess_area": 5441.767614636105,
++    "outside_area": 4300.923305596705,
++    "coverage_fraction": 0.9944657283248926,
++    "score": 0.009752489402666098,
++    "area_unit": "assembly_px_squared"
++  },
++  "raster": {
++    "covered_fraction": 0.9955181268021971,
++    "uncovered_pixels": 10389,
++    "overlap_pixels": 12451
++  },
++  "metrics": {
++    "raw": {
++      "available": true,
++      "mse": 886.2056759464896,
++      "psnr_db": 18.65545833605689,
++      "identical": false,
++      "covered_psnr_db": 18.909200747168857,
++      "ssim_gray": 0.7393815833931151
++    },
++    "corrected": {
++      "available": true,
++      "mse": 580.4538141435477,
++      "psnr_db": 20.493126915919074,
++      "identical": false,
++      "covered_psnr_db": 20.898027934558165,
++      "ssim_gray": 0.7444375407643062
++    }
++  },
++  "seams": [
++    {
++      "piece_a": "S01",
++      "piece_b": "S02",
++      "shared_edge_length_px": 416.3414400753078,
++      "sample_pairs": 145,
++      "mean_color_difference_deltaE76": 3.423048973083496,
++      "mean_gradient_difference": 1.547078251838684,
++      "reference_color_difference_deltaE76": 5.905404090881348,
++      "gradient_residual_vs_reference": 1.9421230554580688
++    },
++    {
++      "piece_a": "S01",
++      "piece_b": "S10",
++      "shared_edge_length_px": 143.3732224165858,
++      "sample_pairs": 45,
++      "mean_color_difference_deltaE76": 8.038748741149902,
++      "mean_gradient_difference": 1.8528907299041748,
++      "reference_color_difference_deltaE76": 4.746250152587891,
++      "gradient_residual_vs_reference": 1.7929627895355225
++    },
++    {
++      "piece_a": "S01",
++      "piece_b": "S12",
++      "shared_edge_length_px": 263.7142272267867,
++      "sample_pairs": 89,
++      "mean_color_difference_deltaE76": 7.926435947418213,
++      "mean_gradient_difference": 1.1775776147842407,
++      "reference_color_difference_deltaE76": 5.0438032150268555,
++      "gradient_residual_vs_reference": 1.0750782489776611
++    },
++    {
++      "piece_a": "S02",
++      "piece_b": "S03",
++      "shared_edge_length_px": 513.0339405531129,
++      "sample_pairs": 172,
++      "mean_color_difference_deltaE76": 6.795158863067627,
++      "mean_gradient_difference": 1.5386145114898682,
++      "reference_color_difference_deltaE76": 6.383880138397217,
++      "gradient_residual_vs_reference": 1.591346025466919
++    },
++    {
++      "piece_a": "S02",
++      "piece_b": "S10",
++      "shared_edge_length_px": 327.51481297152026,
++      "sample_pairs": 109,
++      "mean_color_difference_deltaE76": 4.416909694671631,
++      "mean_gradient_difference": 1.0256690979003906,
++      "reference_color_difference_deltaE76": 1.7125086784362793,
++      "gradient_residual_vs_reference": 1.0217725038528442
++    },
++    {
++      "piece_a": "S03",
++      "piece_b": "S07",
++      "shared_edge_length_px": 330.28406119488375,
++      "sample_pairs": 110,
++      "mean_color_difference_deltaE76": 4.734265327453613,
++      "mean_gradient_difference": 1.2953922748565674,
++      "reference_color_difference_deltaE76": 3.98779296875,
++      "gradient_residual_vs_reference": 1.6945949792861938
++    },
++    {
++      "piece_a": "S04",
++      "piece_b": "S06",
++      "shared_edge_length_px": 529.3046295915018,
++      "sample_pairs": 179,
++      "mean_color_difference_deltaE76": 8.87820816040039,
++      "mean_gradient_difference": 2.332836627960205,
++      "reference_color_difference_deltaE76": 7.628634929656982,
++      "gradient_residual_vs_reference": 2.022509813308716
++    },
++    {
++      "piece_a": "S04",
++      "piece_b": "S08",
++      "shared_edge_length_px": 260.1475150390719,
++      "sample_pairs": 88,
++      "mean_color_difference_deltaE76": 34.362178802490234,
++      "mean_gradient_difference": 2.3418991565704346,
++      "reference_color_difference_deltaE76": 40.198246002197266,
++      "gradient_residual_vs_reference": 3.200683832168579
++    },
++    {
++      "piece_a": "S04",
++      "piece_b": "S12",
++      "shared_edge_length_px": 225.6605052028836,
++      "sample_pairs": 75,
++      "mean_color_difference_deltaE76": 21.005294799804688,
++      "mean_gradient_difference": 4.196556568145752,
++      "reference_color_difference_deltaE76": 26.933191299438477,
++      "gradient_residual_vs_reference": 4.628997802734375
++    },
++    {
++      "piece_a": "S05",
++      "piece_b": "S06",
++      "shared_edge_length_px": 347.965003858926,
++      "sample_pairs": 120,
++      "mean_color_difference_deltaE76": 9.65662670135498,
++      "mean_gradient_difference": 3.7085211277008057,
++      "reference_color_difference_deltaE76": 14.90383529663086,
++      "gradient_residual_vs_reference": 3.1143734455108643
++    },
++    {
++      "piece_a": "S05",
++      "piece_b": "S13",
++      "shared_edge_length_px": 274.7954100047841,
++      "sample_pairs": 91,
++      "mean_color_difference_deltaE76": 6.5076985359191895,
++      "mean_gradient_difference": 1.2989039421081543,
++      "reference_color_difference_deltaE76": 3.548823833465576,
++      "gradient_residual_vs_reference": 1.099193811416626
++    },
++    {
++      "piece_a": "S05",
++      "piece_b": "S14",
++      "shared_edge_length_px": 515.0071850000003,
++      "sample_pairs": 171,
++      "mean_color_difference_deltaE76": 4.102569580078125,
++      "mean_gradient_difference": 1.2456979751586914,
++      "reference_color_difference_deltaE76": 1.9928104877471924,
++      "gradient_residual_vs_reference": 1.229838252067566
++    },
++    {
++      "piece_a": "S06",
++      "piece_b": "S13",
++      "shared_edge_length_px": 314.96910200922815,
++      "sample_pairs": 106,
++      "mean_color_difference_deltaE76": 6.972315311431885,
++      "mean_gradient_difference": 3.760908365249634,
++      "reference_color_difference_deltaE76": 7.018701076507568,
++      "gradient_residual_vs_reference": 3.5429258346557617
++    },
++    {
++      "piece_a": "S07",
++      "piece_b": "S10",
++      "shared_edge_length_px": 530.5979996308179,
++      "sample_pairs": 178,
++      "mean_color_difference_deltaE76": 8.229813575744629,
++      "mean_gradient_difference": 2.1652114391326904,
++      "reference_color_difference_deltaE76": 9.023673057556152,
++      "gradient_residual_vs_reference": 2.2663817405700684
++    },
++    {
++      "piece_a": "S07",
++      "piece_b": "S11",
++      "shared_edge_length_px": 232.16640564795233,
++      "sample_pairs": 80,
++      "mean_color_difference_deltaE76": 5.298797130584717,
++      "mean_gradient_difference": 1.4240682125091553,
++      "reference_color_difference_deltaE76": 7.96401834487915,
++      "gradient_residual_vs_reference": 2.1320064067840576
++    },
++    {
++      "piece_a": "S07",
++      "piece_b": "S15",
++      "shared_edge_length_px": 131.05575652012962,
++      "sample_pairs": 43,
++      "mean_color_difference_deltaE76": 8.514957427978516,
++      "mean_gradient_difference": 2.5395803451538086,
++      "reference_color_difference_deltaE76": 13.94443130493164,
++      "gradient_residual_vs_reference": 1.5788185596466064
++    },
++    {
++      "piece_a": "S08",
++      "piece_b": "S09",
++      "shared_edge_length_px": 253.5023250643171,
++      "sample_pairs": 86,
++      "mean_color_difference_deltaE76": 5.4940690994262695,
++      "mean_gradient_difference": 1.7965526580810547,
++      "reference_color_difference_deltaE76": 11.052282333374023,
++      "gradient_residual_vs_reference": 2.0838303565979004
++    },
++    {
++      "piece_a": "S08",
++      "piece_b": "S12",
++      "shared_edge_length_px": 524.7834359999993,
++      "sample_pairs": 175,
++      "mean_color_difference_deltaE76": 6.234987258911133,
++      "mean_gradient_difference": 2.097561836242676,
++      "reference_color_difference_deltaE76": 8.968117713928223,
++      "gradient_residual_vs_reference": 2.3346846103668213
++    },
++    {
++      "piece_a": "S10",
++      "piece_b": "S12",
++      "shared_edge_length_px": 497.0062094213961,
++      "sample_pairs": 174,
++      "mean_color_difference_deltaE76": 4.593742847442627,
++      "mean_gradient_difference": 1.4825323820114136,
++      "reference_color_difference_deltaE76": 5.409983158111572,
++      "gradient_residual_vs_reference": 1.4091295003890991
++    },
++    {
++      "piece_a": "S10",
++      "piece_b": "S15",
++      "shared_edge_length_px": 211.04921333152814,
++      "sample_pairs": 73,
++      "mean_color_difference_deltaE76": 8.387696266174316,
++      "mean_gradient_difference": 2.361102819442749,
++      "reference_color_difference_deltaE76": 9.521053314208984,
++      "gradient_residual_vs_reference": 1.8978071212768555
++    },
++    {
++      "piece_a": "S11",
++      "piece_b": "S15",
++      "shared_edge_length_px": 492.3789938375794,
++      "sample_pairs": 164,
++      "mean_color_difference_deltaE76": 6.947010517120361,
++      "mean_gradient_difference": 1.7071553468704224,
++      "reference_color_difference_deltaE76": 8.963644027709961,
++      "gradient_residual_vs_reference": 1.9591227769851685
++    },
++    {
++      "piece_a": "S11",
++      "piece_b": "S16",
++      "shared_edge_length_px": 276.21737569547815,
++      "sample_pairs": 98,
++      "mean_color_difference_deltaE76": 5.8298845291137695,
++      "mean_gradient_difference": 2.537113666534424,
++      "reference_color_difference_deltaE76": 10.949666023254395,
++      "gradient_residual_vs_reference": 3.1981122493743896
++    },
++    {
++      "piece_a": "S13",
++      "piece_b": "S15",
++      "shared_edge_length_px": 299.22424620055295,
++      "sample_pairs": 101,
++      "mean_color_difference_deltaE76": 7.1126508712768555,
++      "mean_gradient_difference": 1.3535490036010742,
++      "reference_color_difference_deltaE76": 3.5051348209381104,
++      "gradient_residual_vs_reference": 1.8962253332138062
++    },
++    {
++      "piece_a": "S13",
++      "piece_b": "S16",
++      "shared_edge_length_px": 498.93395891910114,
++      "sample_pairs": 168,
++      "mean_color_difference_deltaE76": 16.20137596130371,
++      "mean_gradient_difference": 2.471574544906616,
++      "reference_color_difference_deltaE76": 9.58337688446045,
++      "gradient_residual_vs_reference": 3.32414174079895
++    }
++  ],
++  "seam_legend": {
++    "yellow": "polygon boundary",
++    "magenta": "uncovered pixel",
++    "cyan": "overlapping textures"
++  },
++  "upstream_geometry_quality": {
++    "objective": "(missingArea+overlapExcessArea+outsideArea)/totalPieceArea",
++    "score": 0.009752489498131624,
++    "pieceCount": 16,
++    "totalPieceArea": 2313709.6833546474,
++    "rectangleArea": 2316788.7311406797,
++    "coveredArea": 2303966.9925533426,
++    "unionArea": 2308267.9157165075,
++    "missingArea": 12821.738587336791,
++    "overlapExcessArea": 5441.767638139711,
++    "outsideArea": 4300.92316316514,
++    "pairwiseOverlapArea": 5441.767642002052,
++    "coverageFraction": 0.9944657281801332,
++    "relativeMissingArea": 0.005541636740157717,
++    "relativeOverlapExcessArea": 0.0023519664879690927,
++    "relativeOutsideArea": 0.0018588862700048142,
++    "relativePairwiseOverlapArea": 0.0023519664896384206,
++    "maxOutsideDistance": 7.74374061528085,
++    "normalization": "total_input_piece_area"
++  },
++  "upstream_verification": {
++    "valid": false,
++    "errors": [
++      "input_area_error exceeds tolerance",
++      "pairwise_overlap_sum exceeds tolerance",
++      "missing_area exceeds tolerance",
++      "outside_area exceeds tolerance",
++      "symmetric_difference_area exceeds tolerance",
++      "outside_vertex_distance exceeds tolerance"
++    ],
++    "tolerance": 1e-07,
++    "metrics": {
++      "relativeAreaError": 0.001329015349242106,
++      "relativeOverlapArea": 0.0023488406898802354,
++      "relativeMissingArea": 0.005534271819608911,
++      "relativeOutsideArea": 0.0018564157816370872,
++      "relativeSymmetricDifference": 0.0073906876012459965,
++      "relativeOutsideVertexDistance": 0.0038202649784018217
++    }
++  },
++  "pieces": [
++    {
++      "scan_piece_id": "S09",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.926471,
++      "covered_pixels": 137232,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 131737,
++        "source_mean_Lab": [
++          51.64826583862305,
++          0.6837446689605713,
++          3.229741334915161
++        ],
++        "target_mean_Lab": [
++          38.13776779174805,
++          3.5721375942230225,
++          8.445337295532227
++        ],
++        "source_std_Lab": [
++          10.468120574951172,
++          1.310373306274414,
++          1.578811526298523
++        ],
++        "target_std_Lab": [
++          12.416996002197266,
++          11.101395606994629,
++          8.161355018615723
++        ],
++        "gain": [
++          1.0930862426757812,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -5.0,
++          1.4441964626312256,
++          2.6077980995178223
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S08",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.935147,
++      "covered_pixels": 142247,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 137075,
++        "source_mean_Lab": [
++          51.93393325805664,
++          0.7009784579277039,
++          2.9072468280792236
++        ],
++        "target_mean_Lab": [
++          40.66356658935547,
++          5.2690582275390625,
++          11.257631301879883
++        ],
++        "source_std_Lab": [
++          13.063504219055176,
++          0.8244098424911499,
++          0.745530903339386
++        ],
++        "target_std_Lab": [
++          15.39717960357666,
++          7.723062038421631,
++          9.757647514343262
++        ],
++        "gain": [
++          1.089320421218872,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -5.0,
++          2.2840399742126465,
++          4.175192356109619
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S12",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.933091,
++      "covered_pixels": 140393,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 134843,
++        "source_mean_Lab": [
++          61.06459426879883,
++          0.7559878826141357,
++          2.9360320568084717
++        ],
++        "target_mean_Lab": [
++          52.20066833496094,
++          2.305269718170166,
++          9.046956062316895
++        ],
++        "source_std_Lab": [
++          14.430420875549316,
++          0.6768585443496704,
++          1.0396968126296997
++        ],
++        "target_std_Lab": [
++          19.459714889526367,
++          6.389686107635498,
++          5.451528072357178
++        ],
++        "gain": [
++          1.125,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -4.431962966918945,
++          0.7746409177780151,
++          3.055461883544922
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S10",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.935401,
++      "covered_pixels": 161521,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 155140,
++        "source_mean_Lab": [
++          69.07688903808594,
++          0.9140174984931946,
++          2.133347749710083
++        ],
++        "target_mean_Lab": [
++          66.21443939208984,
++          -1.0938633680343628,
++          9.494549751281738
++        ],
++        "source_std_Lab": [
++          14.824487686157227,
++          0.7475314736366272,
++          0.9028615355491638
++        ],
++        "target_std_Lab": [
++          19.840782165527344,
++          10.263733863830566,
++          6.500311851501465
++        ],
++        "gain": [
++          1.125,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -1.4312248229980469,
++          -1.003940463066101,
++          3.680601119995117
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S07",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.934684,
++      "covered_pixels": 161085,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 155048,
++        "source_mean_Lab": [
++          67.07110595703125,
++          2.3606741428375244,
++          2.3922736644744873
++        ],
++        "target_mean_Lab": [
++          63.64635467529297,
++          -6.881063461303711,
++          12.88187026977539
++        ],
++        "source_std_Lab": [
++          10.529433250427246,
++          1.128309726715088,
++          0.630818784236908
++        ],
++        "target_std_Lab": [
++          14.513810157775879,
++          19.688318252563477,
++          9.595812797546387
++        ],
++        "gain": [
++          1.125,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -1.7123756408691406,
++          -4.620868682861328,
++          5.0
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S04",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.889422,
++      "covered_pixels": 161635,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 154306,
++        "source_mean_Lab": [
++          37.7078971862793,
++          2.5349860191345215,
++          2.7785065174102783
++        ],
++        "target_mean_Lab": [
++          31.92423439025879,
++          2.6616528034210205,
++          0.2575069069862366
++        ],
++        "source_std_Lab": [
++          11.247941970825195,
++          1.29069983959198,
++          0.5888509154319763
++        ],
++        "target_std_Lab": [
++          13.078497886657715,
++          4.2056756019592285,
++          10.537673950195312
++        ],
++        "gain": [
++          1.0813729763031006,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -2.891831398010254,
++          0.06333339214324951,
++          -1.2604998350143433
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S06",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.889828,
++      "covered_pixels": 114854,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 108259,
++        "source_mean_Lab": [
++          49.36726760864258,
++          0.8846527934074402,
++          2.6973912715911865
++        ],
++        "target_mean_Lab": [
++          42.014896392822266,
++          -2.696997880935669,
++          -3.7834718227386475
++        ],
++        "source_std_Lab": [
++          12.006573677062988,
++          0.7858331799507141,
++          0.7485069036483765
++        ],
++        "target_std_Lab": [
++          11.648307800292969,
++          6.288633346557617,
++          10.939393043518066
++        ],
++        "gain": [
++          0.9850804209709167,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -3.6761856079101562,
++          -1.790825366973877,
++          -3.240431547164917
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S01",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.916661,
++      "covered_pixels": 142248,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 136188,
++        "source_mean_Lab": [
++          45.61238479614258,
++          2.7016243934631348,
++          2.4347023963928223
++        ],
++        "target_mean_Lab": [
++          41.394569396972656,
++          3.518251419067383,
++          7.205096244812012
++        ],
++        "source_std_Lab": [
++          14.710148811340332,
++          1.0915050506591797,
++          0.5348259210586548
++        ],
++        "target_std_Lab": [
++          17.307126998901367,
++          6.838444232940674,
++          6.978939533233643
++        ],
++        "gain": [
++          1.0882716178894043,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -2.108907699584961,
++          0.408313512802124,
++          2.3851969242095947
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S02",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.90784,
++      "covered_pixels": 165085,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 158431,
++        "source_mean_Lab": [
++          51.356990814208984,
++          1.2747701406478882,
++          2.8147459030151367
++        ],
++        "target_mean_Lab": [
++          51.98362731933594,
++          2.051217794418335,
++          5.929553031921387
++        ],
++        "source_std_Lab": [
++          17.743009567260742,
++          0.9619768261909485,
++          0.6502737402915955
++        ],
++        "target_std_Lab": [
++          19.63213539123535,
++          4.452541828155518,
++          9.234387397766113
++        ],
++        "gain": [
++          1.0532357692718506,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          0.31331825256347656,
++          0.3882238268852234,
++          1.557403564453125
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S03",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.929963,
++      "covered_pixels": 164950,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 158871,
++        "source_mean_Lab": [
++          60.33500289916992,
++          1.2149391174316406,
++          2.692204236984253
++        ],
++        "target_mean_Lab": [
++          60.17173767089844,
++          -1.4924761056900024,
++          16.128292083740234
++        ],
++        "source_std_Lab": [
++          16.643108367919922,
++          1.0070143938064575,
++          0.6063552498817444
++        ],
++        "target_std_Lab": [
++          19.41656494140625,
++          9.616633415222168,
++          12.325262069702148
++        ],
++        "gain": [
++          1.083321452140808,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -0.08163261413574219,
++          -1.3537075519561768,
++          5.0
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S05",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.906477,
++      "covered_pixels": 159784,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 152817,
++        "source_mean_Lab": [
++          52.92695999145508,
++          1.7812391519546509,
++          2.353438377380371
++        ],
++        "target_mean_Lab": [
++          44.840232849121094,
++          0.24529053270816803,
++          -0.025058260187506676
++        ],
++        "source_std_Lab": [
++          18.909423828125,
++          1.5968040227890015,
++          3.007155418395996
++        ],
++        "target_std_Lab": [
++          22.288043975830078,
++          2.5424258708953857,
++          5.478632926940918
++        ],
++        "gain": [
++          1.08933687210083,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -4.043363571166992,
++          -0.767974317073822,
++          -1.1892483234405518
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S13",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.923152,
++      "covered_pixels": 137255,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 131506,
++        "source_mean_Lab": [
++          39.27439880371094,
++          2.62429141998291,
++          3.0285484790802
++        ],
++        "target_mean_Lab": [
++          32.534942626953125,
++          -4.203425407409668,
++          -8.098727226257324
++        ],
++        "source_std_Lab": [
++          11.206581115722656,
++          1.340508222579956,
++          0.909951388835907
++        ],
++        "target_std_Lab": [
++          14.39565658569336,
++          6.735234260559082,
++          14.495417594909668
++        ],
++        "gain": [
++          1.125,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -3.3697280883789062,
++          -3.413858413696289,
++          -5.0
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S15",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.918633,
++      "covered_pixels": 137855,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 131759,
++        "source_mean_Lab": [
++          47.80373764038086,
++          2.360745906829834,
++          3.145296573638916
++        ],
++        "target_mean_Lab": [
++          45.560298919677734,
++          -10.454352378845215,
++          5.3895368576049805
++        ],
++        "source_std_Lab": [
++          8.103531837463379,
++          1.1303802728652954,
++          0.8136007189750671
++        ],
++        "target_std_Lab": [
++          9.106125831604004,
++          9.077596664428711,
++          9.292134284973145
++        ],
++        "gain": [
++          1.061861515045166,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -1.1217193603515625,
++          -5.0,
++          1.1221201419830322
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S11",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.934401,
++      "covered_pixels": 140591,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 135166,
++        "source_mean_Lab": [
++          64.97834014892578,
++          1.9640848636627197,
++          3.1731231212615967
++        ],
++        "target_mean_Lab": [
++          61.72221374511719,
++          -6.687510013580322,
++          9.772568702697754
++        ],
++        "source_std_Lab": [
++          15.972023010253906,
++          0.9932557344436646,
++          1.3572802543640137
++        ],
++        "target_std_Lab": [
++          20.580093383789062,
++          8.011958122253418,
++          6.105679512023926
++        ],
++        "gain": [
++          1.125,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -1.6280632019042969,
++          -4.3257975578308105,
++          3.299722671508789
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S16",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.915875,
++      "covered_pixels": 133906,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 127886,
++        "source_mean_Lab": [
++          58.69163131713867,
++          1.0342180728912354,
++          2.951005220413208
++        ],
++        "target_mean_Lab": [
++          57.614471435546875,
++          -24.001720428466797,
++          18.76648712158203
++        ],
++        "source_std_Lab": [
++          4.2572126388549805,
++          0.6632294058799744,
++          0.629953145980835
++        ],
++        "target_std_Lab": [
++          5.100749969482422,
++          4.5431671142578125,
++          4.568065643310547
++        ],
++        "gain": [
++          1.0990715026855469,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -0.5385799407958984,
++          -5.0,
++          5.0
++        ],
++        "strength": 0.5
++      }
++    },
++    {
++      "scan_piece_id": "S14",
++      "source_piece_id": null,
++      "match_confidence": null,
++      "match_status": "accepted",
++      "extraction_quality": 0.931891,
++      "covered_pixels": 119430,
++      "color_correction": {
++        "applied": true,
++        "sample_pixels": 113557,
++        "source_mean_Lab": [
++          57.815032958984375,
++          1.686972737312317,
++          2.316787004470825
++        ],
++        "target_mean_Lab": [
++          46.663108825683594,
++          -0.2489655464887619,
++          1.0535192489624023
++        ],
++        "source_std_Lab": [
++          16.538888931274414,
++          1.2176121473312378,
++          0.7215272784233093
++        ],
++        "target_std_Lab": [
++          24.374116897583008,
++          2.4404304027557373,
++          5.074878215789795
++        ],
++        "gain": [
++          1.125,
++          1.125,
++          1.125
++        ],
++        "mean_shift_Lab": [
++          -5.0,
++          -0.9679691195487976,
++          -0.6316338777542114
++        ],
++        "strength": 0.5
++      }
++    }
++  ],
++  "config": {
++    "schema_version": "1.0",
++    "color_space": "Lab",
++    "color_correction": true,
++    "color_strength": 0.5,
++    "color_gain_limits": [
++      0.8,
++      1.25
++    ],
++    "color_max_offset": 10.0,
++    "color_sample_erode_px": 3,
++    "blend_mode": "feather",
++    "feather_px": 3.0,
++    "edge_erode_px": 0,
++    "evaluate_ssim": true,
++    "adjacency_tolerance_px": 8.0,
++    "write_steps": true,
++    "fail_on_manual_review": false,
++    "max_canvas_pixels": 25000000
++  }
++}
+diff --git a/stage4_assembly/output/placement_guide.md b/stage4_assembly/output/placement_guide.md
+new file mode 100644
+index 0000000..b8ac309
+--- /dev/null
++++ b/stage4_assembly/output/placement_guide.md
+@@ -0,0 +1,42 @@
++# 人工摆放计划
++
++在空白区域建立目标外框：左上角为原点，x 向右、y 向下。按顺序图及下表逐片摆放。
++目标外框的坐标轴与原俯视图坐标轴保持平行；若整体转动外框，表内转角还须叠加该转角。
++旋转角以原始俯视照片中该片的朝向为起点；正值顺时针，负值逆时针。先核对取片图中的 S 编号。
++原照片中的碎片若已被移动或转动，请重新核对朝向；PNG 的基边方向不是桌面原朝向。
++
++目标外框约 253.38 × 142.87 mm；毫米坐标只表示该外框内的相对位置。
++
++待复核事项：
++
++- Stage 3 layout is approximate; gaps, overlaps and boundary errors remain.
++- S06: upstream manual review required.
++
++![取片索引](piece_index.png)
++
++![目标顺序](placement_order.png)
++
++| 步骤 | 取片 | 从原桌面朝向旋转 | 目标中心 (px) | 对齐已放碎片 | 复核 |
++| --- | --- | --- | --- | --- | --- |
++| [1](steps/01.png) | S09 | 逆时针 42.56° | (268.4, 126.2) | 建立锚点 | — |
++| [2](steps/02.png) | S08 | 逆时针 40.07° | (807.5, 128.9) | S09 | — |
++| [3](steps/03.png) | S12 | 逆时针 41.15° | (812.2, 396.2) | S08 | — |
++| [4](steps/04.png) | S10 | 顺时针 143.01° | (743.7, 664.0) | S12 | — |
++| [5](steps/05.png) | S07 | 逆时针 81.93° | (801.9, 966.7) | S10 | — |
++| [6](steps/06.png) | S04 | 顺时针 145.71° | (1261.6, 222.1) | S08, S12 | — |
++| [7](steps/07.png) | S06 | 逆时针 36.20° | (1420.4, 479.2) | S04 | 需要 |
++| [8](steps/08.png) | S01 | 顺时针 169.60° | (281.0, 379.1) | S12, S10 | — |
++| [9](steps/09.png) | S02 | 逆时针 9.73° | (225.6, 683.4) | S10, S01 | — |
++| [10](steps/10.png) | S03 | 逆时针 14.57° | (289.8, 1001.4) | S07, S02 | — |
++| [11](steps/11.png) | S05 | 逆时针 41.87° | (1841.9, 373.1) | S06 | — |
++| [12](steps/12.png) | S13 | 顺时针 170.13° | (1741.2, 713.1) | S06, S05 | — |
++| [13](steps/13.png) | S15 | 逆时针 163.29° | (1258.6, 737.9) | S10, S07, S13 | — |
++| [14](steps/14.png) | S11 | 逆时针 33.67° | (1312.6, 1017.8) | S07, S15 | — |
++| [15](steps/15.png) | S16 | 顺时针 174.84° | (1805.6, 981.1) | S13, S11 | — |
++| [16](steps/16.png) | S14 | 顺时针 135.69° | (1696.2, 102.0) | S05 | — |
++
++角度来自图像平面内的变换；透视单应时，它只是中心附近的近似朝向。不要用数字拼接中的缩放或颜色校正调整实物片形。
++
++黑色缺口是未覆盖区域。参考图只用于整图朝向选择、颜色统计和评价，没有拿原图像素填补缺口。
++
++![原桌面取片位置](scan_locations.png)
+diff --git a/stage4_assembly/output/placement_plan.json b/stage4_assembly/output/placement_plan.json
+new file mode 100644
+index 0000000..3dac1cf
+--- /dev/null
++++ b/stage4_assembly/output/placement_plan.json
+@@ -0,0 +1,1872 @@
++{
++  "schema_version": "1.0",
++  "algorithm_version": "stage4-assembly-1.0.0",
++  "session_id": "9ab5743b5eec79a1",
++  "coordinate_system": "assembly_px",
++  "source_coordinate_system": "rectified_px",
++  "axes": "origin at target board top-left; x right, y down; positive rotation clockwise",
++  "rectangle_px": [
++    2027.0166229464926,
++    1142.9549737845618
++  ],
++  "rectangle_mm": [
++    253.37707786831157,
++    142.86937172307023
++  ],
++  "mm_per_assembly_px": 0.125,
++  "execution": "manual",
++  "order_strategy": "top-left anchor, then largest total shared edge with placed pieces",
++  "warnings": [
++    "Stage 3 layout is approximate; gaps, overlaps and boundary errors remain.",
++    "S06: upstream manual review required."
++  ],
++  "slot": [
++    {
++      "step": 1,
++      "scan_piece_id": "S09",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          543.1212410140481,
++          252.83284923730184
++        ],
++        [
++          -0.10965660408783151,
++          256.50440208553175
++        ],
++        [
++          0.07500791834968368,
++          0.49442288695172465
++        ],
++        [
++          526.9568583316645,
++          -7.7437409314222805
++        ]
++      ],
++      "target_center_px": [
++        268.35046654443425,
++        126.16465171560006
++      ],
++      "homography_piece_to_source": [
++        [
++          -0.9999771605434433,
++          -0.006758579101549877,
++          563.2559558069478
++        ],
++        [
++          0.006758579101549862,
++          -0.9999771605434433,
++          272.6972208661394
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          0.00034686377696332293,
++          0.0003184645980771431,
++          -0.7217096177419401
++        ],
++        [
++          -0.0003184645980771431,
++          0.00034686377696332293,
++          -0.09207219903748858
++        ],
++        [
++          0.0,
++          0.0,
++          0.0004708865884773714
++        ]
++      ],
++      "rotation_deg": -42.55584456092464,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        1109.094,
++        1455.005
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          996.469,
++          1180.997
++        ],
++        [
++          1390.152,
++          1531.264
++        ],
++        [
++          1225.829,
++          1734.141
++        ],
++        [
++          823.192,
++          1369.454
++        ]
++      ],
++      "align_with_placed_pieces": [],
++      "start_new_component": true,
++      "confidence": null,
++      "extraction_quality": 0.926471,
++      "needs_manual_review": false,
++      "step_image": "steps/01.png",
++      "target_polygon_mm": [
++        [
++          67.89015512675601,
++          31.60410615466273
++        ],
++        [
++          -0.013707075510978939,
++          32.06305026069147
++        ],
++        [
++          0.00937598979371046,
++          0.06180286086896558
++        ],
++        [
++          65.86960729145807,
++          -0.9679676164277851
++        ]
++      ],
++      "target_center_mm": [
++        33.54380831805428,
++        15.770581464450007
++      ]
++    },
++    {
++      "step": 2,
++      "scan_piece_id": "S08",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          524.6039638991415,
++          -2.3903629880805966e-05
++        ],
++        [
++          1084.5493418991036,
++          0.00018182512121711625
++        ],
++        [
++          1071.5309232259053,
++          263.1219370420599
++        ],
++        [
++          545.5167591555366,
++          257.8698367799284
++        ]
++      ],
++      "target_center_px": [
++        807.4704750816898,
++        128.89270388748798
++      ],
++      "homography_piece_to_source": [
++        [
++          0.9999999999999324,
++          -3.6740860652750237e-07,
++          504.6039712473149
++        ],
++        [
++          3.6740860644762256e-07,
++          0.9999999999999324,
++          -20.00003125180075
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          0.000508406163335212,
++          0.00042772575233174974,
++          -0.6511571180622799
++        ],
++        [
++          -0.0004277257523317498,
++          0.000508406163335212,
++          0.02432209070969249
++        ],
++        [
++          0.0,
++          0.0,
++          0.0006643990846364846
++        ]
++      ],
++      "rotation_deg": -40.074142557816714,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        1308.436,
++        1221.397
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          1174.961,
++          940.663
++        ],
++        [
++          1603.438,
++          1301.144
++        ],
++        [
++          1424.084,
++          1494.107
++        ],
++        [
++          1024.953,
++          1151.452
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S09"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.935147,
++      "needs_manual_review": false,
++      "step_image": "steps/02.png",
++      "target_polygon_mm": [
++        [
++          65.57549548739269,
++          -2.9879537351007457e-06
++        ],
++        [
++          135.56866773738795,
++          2.272814015213953e-05
++        ],
++        [
++          133.94136540323817,
++          32.89024213025749
++        ],
++        [
++          68.18959489444208,
++          32.23372959749105
++        ]
++      ],
++      "target_center_mm": [
++        100.93380938521122,
++        16.111587985935998
++      ]
++    },
++    {
++      "step": 3,
++      "scan_piece_id": "S12",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          546.3097796122386,
++          257.87778613141086
++        ],
++        [
++          1071.0670588693604,
++          263.1173058259242
++        ],
++        [
++          1057.1655519108076,
++          547.4467038213661
++        ],
++        [
++          560.8533437231772,
++          521.1909576437611
++        ]
++      ],
++      "target_center_px": [
++        812.2492530876407,
++        396.2406137371939
++      ],
++      "homography_piece_to_source": [
++        [
++          0.9999501570722628,
++          -0.00998415600623746,
++          526.5104595909181
++        ],
++        [
++          0.009984156006237574,
++          0.9999501570722628,
++          237.6790998698408
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          0.00035251924190803286,
++          0.00030808627813554216,
++          -0.7442202099364787
++        ],
++        [
++          -0.0003080862781355421,
++          0.00035251924190803286,
++          0.11596034561855223
++        ],
++        [
++          0.0,
++          0.0,
++          0.0004681740797456833
++        ]
++      ],
++      "rotation_deg": -41.15202647319208,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        1710.771,
++        1692.43
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          1601.578,
++          1413.244
++        ],
++        [
++          1993.255,
++          1762.511
++        ],
++        [
++          1795.682,
++          1967.453
++        ],
++        [
++          1439.254,
++          1621.08
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S08"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.933091,
++      "needs_manual_review": false,
++      "step_image": "steps/03.png",
++      "target_polygon_mm": [
++        [
++          68.28872245152982,
++          32.23472326642636
++        ],
++        [
++          133.88338235867005,
++          32.88966322824052
++        ],
++        [
++          132.14569398885095,
++          68.43083797767076
++        ],
++        [
++          70.10666796539715,
++          65.14886970547013
++        ]
++      ],
++      "target_center_mm": [
++        101.53115663595509,
++        49.530076717149235
++      ]
++    },
++    {
++      "step": 4,
++      "scan_piece_id": "S10",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          417.7470124682852,
++          513.6203936554026
++        ],
++        [
++          1059.6849983619943,
++          547.5799878250914
++        ],
++        [
++          1044.9325655747646,
++          780.9086527937438
++        ],
++        [
++          513.5471020343812,
++          828.4295820481541
++        ]
++      ],
++      "target_center_px": [
++        743.6746084327009,
++        663.9766817311082
++      ],
++      "homography_piece_to_source": [
++        [
++          0.9986036366356246,
++          -0.052827804214309784,
++          398.8314958198591
++        ],
++        [
++          0.05282780421430967,
++          0.9986036366356243,
++          492.59176483840446
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          -0.00037143132901416983,
++          -0.000279832998887489,
++          1.08064037912968
++        ],
++        [
++          0.000279832998887489,
++          -0.0003714313290141697,
++          0.701836204580257
++        ],
++        [
++          0.0,
++          0.0,
++          0.00046504595420600374
++        ]
++      ],
++      "rotation_deg": 143.00596113847075,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        753.402,
++        1625.828
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          583.15,
++          1351.158
++        ],
++        [
++          1036.161,
++          1632.955
++        ],
++        [
++          923.246,
++          1942.038
++        ],
++        [
++          430.966,
++          1528.64
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S12"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.935401,
++      "needs_manual_review": false,
++      "step_image": "steps/04.png",
++      "target_polygon_mm": [
++        [
++          52.21837655853565,
++          64.20254920692533
++        ],
++        [
++          132.4606247952493,
++          68.44749847813642
++        ],
++        [
++          130.61657069684557,
++          97.61358159921798
++        ],
++        [
++          64.19338775429765,
++          103.55369775601926
++        ]
++      ],
++      "target_center_mm": [
++        92.95932605408761,
++        82.99708521638853
++      ]
++    },
++    {
++      "step": 5,
++      "scan_piece_id": "S07",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          509.66722357992876,
++          828.7765451229288
++        ],
++        [
++          1042.0360330438361,
++          781.1676839408092
++        ],
++        [
++          1025.8895882978345,
++          1145.1487162556596
++        ],
++        [
++          613.1394607752654,
++          1142.4426762191356
++        ]
++      ],
++      "target_center_px": [
++        801.8738186455557,
++        966.6502082912373
++      ],
++      "homography_piece_to_source": [
++        [
++          0.9960251114586012,
++          0.08907287658923724,
++          487.9652638189722
++        ],
++        [
++          -0.08907287658923725,
++          0.9960251114586012,
++          810.637500425541
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          6.026818806501595e-05,
++          0.00042514036670050575,
++          -0.26361195937984017
++        ],
++        [
++          -0.00042514036670050575,
++          6.026818806501596e-05,
++          1.2317876866812925
++        ],
++        [
++          0.0,
++          0.0,
++          0.00042939094794773624
++        ]
++      ],
++      "rotation_deg": -81.93147323708743,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        2081.924,
++        1134.815
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          2177.42,
++          826.149
++        ],
++        [
++          2299.279,
++          1346.566
++        ],
++        [
++          1936.635,
++          1381.666
++        ],
++        [
++          1881.382,
++          972.622
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S10"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.934684,
++      "needs_manual_review": false,
++      "step_image": "steps/05.png",
++      "target_polygon_mm": [
++        [
++          63.708402947491095,
++          103.5970681403661
++        ],
++        [
++          130.25450413047952,
++          97.64596049260115
++        ],
++        [
++          128.2361985372293,
++          143.14358953195745
++        ],
++        [
++          76.64243259690818,
++          142.80533452739195
++        ]
++      ],
++      "target_center_mm": [
++        100.23422733069447,
++        120.83127603640466
++      ]
++    },
++    {
++      "step": 6,
++      "scan_piece_id": "S04",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          1564.0159374829207,
++          297.412434643986
++        ],
++        [
++          1060.0126917197913,
++          488.5071104660791
++        ],
++        [
++          1084.4898579271162,
++          3.2973471040713775
++        ],
++        [
++          1360.8999793184325,
++          3.0960440304820622
++        ]
++      ],
++      "target_center_px": [
++        1261.583071968011,
++        222.07883033296167
++      ],
++      "homography_piece_to_source": [
++        [
++          -0.93504609923483,
++          -0.3545261517938109,
++          1589.8073825034935
++        ],
++        [
++          0.35452615179381086,
++          -0.93504609923483,
++          309.0228335928063
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          -0.0014075838313371562,
++          -0.0009597922578201743,
++          3.4221113350558556
++        ],
++        [
++          0.0009597922578201741,
++          -0.0014075838313371562,
++          1.159470938803984
++        ],
++        [
++          0.0,
++          0.0,
++          0.0017036705737455585
++        ]
++      ],
++      "rotation_deg": 145.71101098040754,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        358.948,
++        799.694
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          151.516,
++          567.073
++        ],
++        [
++          675.583,
++          693.128
++        ],
++        [
++          382.009,
++          1080.222
++        ],
++        [
++          153.524,
++          924.668
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S08",
++        "S12"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.889422,
++      "needs_manual_review": false,
++      "step_image": "steps/06.png",
++      "target_polygon_mm": [
++        [
++          195.50199218536508,
++          37.17655433049825
++        ],
++        [
++          132.5015864649739,
++          61.06338880825989
++        ],
++        [
++          135.56123224088952,
++          0.4121683880089222
++        ],
++        [
++          170.11249741480407,
++          0.3870055038102578
++        ]
++      ],
++      "target_center_mm": [
++        157.69788399600137,
++        27.75985379162021
++      ]
++    },
++    {
++      "step": 7,
++      "scan_piece_id": "S06",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          1748.187569268126,
++          591.7742845274604
++        ],
++        [
++          1063.1372067211103,
++          560.3514242509774
++        ],
++        [
++          1054.3315376643307,
++          494.8479353660522
++        ],
++        [
++          1554.621983247644,
++          300.0241436525523
++        ]
++      ],
++      "target_center_px": [
++        1420.3733282222074,
++        479.1687861831494
++      ],
++      "homography_piece_to_source": [
++        [
++          -0.99894965547945,
++          0.045821237625017976,
++          1767.2501376252148
++        ],
++        [
++          -0.04582123762501797,
++          -0.9989496554794498,
++          612.6697023895495
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          0.0003538199097257694,
++          0.0002589729516318723,
++          -0.23323645519253924
++        ],
++        [
++          -0.00025897295163187226,
++          0.00035381990972576933,
++          0.2377370629072172
++        ],
++        [
++          0.0,
++          0.0,
++          0.00043846951739374615
++        ]
++      ],
++      "rotation_deg": -36.20167912281062,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        1612.627,
++        1102.229
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          1307.991,
++          898.686
++        ],
++        [
++          1826.766,
++          1036.961
++        ],
++        [
++          1810.646,
++          1386.712
++        ],
++        [
++          1276.409,
++          956.744
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S04"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.889828,
++      "needs_manual_review": true,
++      "step_image": "steps/07.png",
++      "target_polygon_mm": [
++        [
++          218.52344615851575,
++          73.97178556593255
++        ],
++        [
++          132.89215084013878,
++          70.04392803137218
++        ],
++        [
++          131.79144220804133,
++          61.85599192075652
++        ],
++        [
++          194.3277479059555,
++          37.50301795656904
++        ]
++      ],
++      "target_center_mm": [
++        177.54666602777593,
++        59.896098272893674
++      ]
++    },
++    {
++      "step": 8,
++      "scan_piece_id": "S01",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          560.9200376494814,
++          521.194412839381
++        ],
++        [
++          -0.08740645153693549,
++          491.51700784829745
++        ],
++        [
++          0.9879876082384271,
++          247.1723520474718
++        ],
++        [
++          545.7457535218027,
++          253.5508471717077
++        ]
++      ],
++      "target_center_px": [
++        281.0098252323321,
++        379.09517313490744
++      ],
++      "homography_piece_to_source": [
++        [
++          -0.9986037143888059,
++          0.0528263344259306,
++          579.835585248739
++        ],
++        [
++          -0.05282633442593059,
++          -0.9986037143888059,
++          542.2230138156757
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          -0.0006905268863458641,
++          -0.00012674514871758048,
++          1.3916550374519903
++        ],
++        [
++          0.0001267451487175805,
++          -0.0006905268863458641,
++          0.30044612081857514
++        ],
++        [
++          0.0,
++          0.0,
++          0.0007020624693858958
++        ]
++      ],
++      "rotation_deg": 169.59921743158225,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        1664.456,
++        355.177
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          1414.799,
++          164.88
++        ],
++        [
++          1961.23,
++          295.35
++        ],
++        [
++          1916.06,
++          535.485
++        ],
++        [
++          1381.405,
++          430.865
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S12",
++        "S10"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.916661,
++      "needs_manual_review": false,
++      "step_image": "steps/08.png",
++      "target_polygon_mm": [
++        [
++          70.11500470618518,
++          65.14930160492263
++        ],
++        [
++          -0.010925806442116937,
++          61.43962598103718
++        ],
++        [
++          0.12349845102980339,
++          30.896544005933976
++        ],
++        [
++          68.21821919022534,
++          31.69385589646346
++        ]
++      ],
++      "target_center_mm": [
++        35.12622815404151,
++        47.38689664186343
++      ]
++    },
++    {
++      "step": 9,
++      "scan_piece_id": "S02",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          514.9934263840823,
++          826.3695690420415
++        ],
++        [
++          -4.3828054003824946e-06,
++          877.5900191038943
++        ],
++        [
++          4.094610631000251e-06,
++          488.23669713176196
++        ],
++        [
++          415.7063668804685,
++          512.8744163925508
++        ]
++      ],
++      "target_center_px": [
++        225.6234189330366,
++        683.3917847548336
++      ],
++      "homography_piece_to_source": [
++        [
++          -0.9950904024050988,
++          -0.0989701522746036,
++          536.8746374776767
++        ],
++        [
++          0.09897015227460358,
++          -0.995090402405099,
++          844.2919740446512
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          0.0006546244220700946,
++          0.00011229548176112868,
++          -0.583534689945601
++        ],
++        [
++          -0.00011229548176112868,
++          0.0006546244220700947,
++          0.17032830561821025
++        ],
++        [
++          0.0,
++          0.0,
++          0.0006641862741975683
++        ]
++      ],
++      "rotation_deg": -9.733883298186356,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        1016.113,
++        607.487
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          826.733,
++          376.995
++        ],
++        [
++          1232.29,
++          471.563
++        ],
++        [
++          1277.144,
++          797.331
++        ],
++        [
++          760.904,
++          760.743
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S10",
++        "S01"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.90784,
++      "needs_manual_review": false,
++      "step_image": "steps/09.png",
++      "target_polygon_mm": [
++        [
++          64.37417829801029,
++          103.29619613025518
++        ],
++        [
++          -5.478506750478118e-07,
++          109.69875238798679
++        ],
++        [
++          5.118263288750313e-07,
++          61.029587141470245
++        ],
++        [
++          51.963295860058565,
++          64.10930204906884
++        ]
++      ],
++      "target_center_mm": [
++        28.202927366629574,
++        85.4239730943542
++      ]
++    },
++    {
++      "step": 10,
++      "scan_piece_id": "S03",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          612.3221651385318,
++          1142.709301135809
++        ],
++        [
++          6.393933745130198e-06,
++          1144.571038014439
++        ],
++        [
++          -1.6194440831895918e-05,
++          876.9114849216272
++        ],
++        [
++          510.5882185626715,
++          826.871261161966
++        ]
++      ],
++      "target_center_px": [
++        289.8393376677567,
++        1001.3862072980069
++      ],
++      "homography_piece_to_source": [
++        [
++          -0.9999953778541579,
++          -0.0030404391655980537,
++          632.3828814789272
++        ],
++        [
++          0.0030404391655980485,
++          -0.9999953778541579,
++          1162.6483999095801
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          0.00045558758906748406,
++          0.00011839105404227624,
++          -0.693998373500414
++        ],
++        [
++          -0.00011839105404227624,
++          0.0004555875890674841,
++          0.35021636959957675
++        ],
++        [
++          0.0,
++          0.0,
++          0.00047071912381831
++        ]
++      ],
++      "rotation_deg": -14.566945498449542,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        1642.731,
++        692.819
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          1393.515,
++          499.448
++        ],
++        [
++          1900.276,
++          579.435
++        ],
++        [
++          1919.303,
++          910.707
++        ],
++        [
++          1326.196,
++          758.504
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S07",
++        "S02"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.929963,
++      "needs_manual_review": false,
++      "step_image": "steps/10.png",
++      "target_polygon_mm": [
++        [
++          76.54027064231647,
++          142.83866264197613
++        ],
++        [
++          7.992417181412748e-07,
++          143.07137975180487
++        ],
++        [
++          -2.0243051039869897e-06,
++          109.6139356152034
++        ],
++        [
++          63.82352732033394,
++          103.35890764524575
++        ]
++      ],
++      "target_center_mm": [
++        36.22991720846959,
++        125.17327591225086
++      ]
++    },
++    {
++      "step": 11,
++      "scan_piece_id": "S05",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          1546.698052651161,
++          288.08086433912524
++        ],
++        [
++          2028.474138463021,
++          106.08030461078874
++        ],
++        [
++          2021.4789781024595,
++          603.0510912729798
++        ],
++        [
++          1746.994786387223,
++          589.9764647723584
++        ]
++      ],
++      "target_center_px": [
++        1841.903357192799,
++        373.0561209448206
++      ],
++      "homography_piece_to_source": [
++        [
++          0.9354744940342136,
++          0.3533942147396185,
++          1520.9206784756843
++        ],
++        [
++          -0.3533942147396183,
++          0.9354744940342137,
++          276.43925875323333
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          0.0007304023420140065,
++          0.0006546977002755928,
++          0.5360928089947578
++        ],
++        [
++          -0.0006546977002755927,
++          0.0007304023420140066,
++          0.0886993599061119
++        ],
++        [
++          0.0,
++          0.0,
++          0.0009808754534171766
++        ]
++      ],
++      "rotation_deg": -41.871529260503195,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        775.937,
++        1075.06
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          612.832,
++          814.745
++        ],
++        [
++          1093.062,
++          1000.787
++        ],
++        [
++          756.143,
++          1366.184
++        ],
++        [
++          560.477,
++          1173.24
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S06"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.906477,
++      "needs_manual_review": false,
++      "step_image": "steps/11.png",
++      "target_polygon_mm": [
++        [
++          193.33725658139514,
++          36.010108042390655
++        ],
++        [
++          253.55926730787763,
++          13.260038076348593
++        ],
++        [
++          252.68487226280743,
++          75.38138640912247
++        ],
++        [
++          218.37434829840288,
++          73.7470580965448
++        ]
++      ],
++      "target_center_mm": [
++        230.23791964909987,
++        46.63201511810257
++      ]
++    },
++    {
++      "step": 12,
++      "scan_piece_id": "S13",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          1433.5492934957506,
++          577.3420068317464
++        ],
++        [
++          2031.8324102386637,
++          604.7849506645645
++        ],
++        [
++          2031.9858353388618,
++          813.9516896856078
++        ],
++        [
++          1530.6931379315035,
++          867.2853529689364
++        ]
++      ],
++      "target_center_px": [
++        1741.23950268194,
++        713.1393345111003
++      ],
++      "homography_piece_to_source": [
++        [
++          0.9989496519273731,
++          -0.04582131506384483,
++          1414.48672675848
++        ],
++        [
++          0.04582131506384478,
++          0.9989496519273731,
++          556.4465874919225
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          -0.00037015700501078804,
++          -6.441657325386206e-05,
++          1.2758751313531238
++        ],
++        [
++          6.441657325386208e-05,
++          -0.000370157005010788,
++          0.8925261069395087
++        ],
++        [
++          0.0,
++          0.0,
++          0.0003757202461057347
++        ]
++      ],
++      "rotation_deg": 170.1279667893598,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        1345.063,
++        1921.427
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          1075.906,
++          1772.259
++        ],
++        [
++          1578.92,
++          1805.661
++        ],
++        [
++          1624.915,
++          2107.966
++        ],
++        [
++          1040.196,
++          1978.355
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S06",
++        "S05"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.923152,
++      "needs_manual_review": false,
++      "step_image": "steps/12.png",
++      "target_polygon_mm": [
++        [
++          179.19366168696882,
++          72.1677508539683
++        ],
++        [
++          253.97905127983296,
++          75.59811883307056
++        ],
++        [
++          253.99822941735772,
++          101.74396121070097
++        ],
++        [
++          191.33664224143794,
++          108.41066912111705
++        ]
++      ],
++      "target_center_mm": [
++        217.6549378352425,
++        89.14241681388754
++      ]
++    },
++    {
++      "step": 13,
++      "scan_piece_id": "S15",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          1528.312332393917,
++          861.1645110727552
++        ],
++        [
++          1031.847542853313,
++          911.9003590883938
++        ],
++        [
++          1060.033333485557,
++          570.3927838368036
++        ],
++        [
++          1434.2718128447104,
++          576.324628105896
++        ]
++      ],
++      "target_center_px": [
++        1258.615216550377,
++        737.8871176967357
++      ],
++      "homography_piece_to_source": [
++        [
++          -0.9948187159471421,
++          -0.10166475496099375,
++          1550.2420018120795
++        ],
++        [
++          0.10166475496099385,
++          -0.9948187159471423,
++          879.0275902924784
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          -0.0003549781494788152,
++          0.00010653531685171001,
++          0.9555773168593399
++        ],
++        [
++          -0.00010653531685171,
++          -0.00035497814947881533,
++          1.2403373462506095
++        ],
++        [
++          0.0,
++          0.0,
++          0.0003706201008647576
++        ]
++      ],
++      "rotation_deg": -163.2945555873692,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        2013.901,
++        2119.313
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          2181.078,
++          1887.46
++        ],
++        [
++          2252.249,
++          2222.656
++        ],
++        [
++          1892.1,
++          2324.55
++        ],
++        [
++          1720.15,
++          2078.764
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S10",
++        "S07",
++        "S13"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.918633,
++      "needs_manual_review": false,
++      "step_image": "steps/13.png",
++      "target_polygon_mm": [
++        [
++          191.0390415492396,
++          107.6455638840944
++        ],
++        [
++          128.98094285666411,
++          113.98754488604922
++        ],
++        [
++          132.50416668569463,
++          71.29909797960045
++        ],
++        [
++          179.2839766055888,
++          72.040578513237
++        ]
++      ],
++      "target_center_mm": [
++        157.32690206879712,
++        92.23588971209196
++      ]
++    },
++    {
++      "step": 14,
++      "scan_piece_id": "S11",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          1617.2931990401883,
++          1142.9549585536877
++        ],
++        [
++          1023.5645520401883,
++          1142.9549695998157
++        ],
++        [
++          1038.4844937288735,
++          911.2220983222352
++        ],
++        [
++          1530.3143027937622,
++          860.9599221719016
++        ]
++      ],
++      "target_center_px": [
++        1312.5544972674222,
++        1017.7939853905312
++      ],
++      "homography_piece_to_source": [
++        [
++          -0.9999999999999996,
++          -1.860467449408805e-08,
++          1637.2931994122819
++        ],
++        [
++          1.8604674488501677e-08,
++          -0.9999999999999996,
++          1162.9549581815943
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          0.0002718513141404989,
++          0.00018107456463256519,
++          -0.4674650033912637
++        ],
++        [
++          -0.00018107456463256516,
++          0.00027185131414049897,
++          0.2810329574959201
++        ],
++        [
++          0.0,
++          0.0,
++          0.00032663608743232776
++        ]
++      ],
++      "rotation_deg": -33.666767155989476,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        2196.257,
++        1652.012
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          2027.235,
++          1411.381
++        ],
++        [
++          2464.436,
++          1642.2
++        ],
++        [
++          2380.499,
++          1925.116
++        ],
++        [
++          1886.353,
++          1595.975
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S07",
++        "S15"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.934401,
++      "needs_manual_review": false,
++      "step_image": "steps/14.png",
++      "target_polygon_mm": [
++        [
++          202.16164988002353,
++          142.86936981921096
++        ],
++        [
++          127.94556900502354,
++          142.86937119997697
++        ],
++        [
++          129.8105617161092,
++          113.9027622902794
++        ],
++        [
++          191.28928784922027,
++          107.6199902714877
++        ]
++      ],
++      "target_center_mm": [
++        164.06931215842778,
++        127.2242481738164
++      ]
++    },
++    {
++      "step": 15,
++      "scan_piece_id": "S16",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          1532.2664733480783,
++          867.2890780291231
++        ],
++        [
++          2028.3808760392494,
++          814.3208912250935
++        ],
++        [
++          2025.0699458160036,
++          1132.6119402072286
++        ],
++        [
++          1613.6786564581105,
++          1131.2362225057313
++        ]
++      ],
++      "target_center_px": [
++        1805.5783808567292,
++        981.1193425832467
++      ],
++      "homography_piece_to_source": [
++        [
++          0.994348770882747,
++          0.10616271400058626,
++          1510.2562436504115
++        ],
++        [
++          -0.10616271400058629,
++          0.9943487708827468,
++          849.52535689148
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          -0.0003317691732237467,
++          -2.993496616859924e-05,
++          1.152620274476859
++        ],
++        [
++          2.993496616859925e-05,
++          -0.00033176917322374664,
++          1.0554486089159096
++        ],
++        [
++          0.0,
++          0.0,
++          0.00033311692450570664
++        ]
++      ],
++      "rotation_deg": 174.8442605801664,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        1451.278,
++        2327.115
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          1246.289,
++          2156.511
++        ],
++        [
++          1655.892,
++          2194.851
++        ],
++        [
++          1713.255,
++          2465.046
++        ],
++        [
++          1214.388,
++          2473.217
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S13",
++        "S11"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.915875,
++      "needs_manual_review": false,
++      "step_image": "steps/15.png",
++      "target_polygon_mm": [
++        [
++          191.5333091685098,
++          108.41113475364038
++        ],
++        [
++          253.54760950490618,
++          101.79011140313669
++        ],
++        [
++          253.13374322700045,
++          141.57649252590357
++        ],
++        [
++          201.7098320572638,
++          141.40452781321642
++        ]
++      ],
++      "target_center_mm": [
++        225.69729760709114,
++        122.63991782290584
++      ]
++    },
++    {
++      "step": 16,
++      "scan_piece_id": "S14",
++      "source_piece_id": null,
++      "target_polygon_px": [
++        [
++          1371.196751830054,
++          1.2272275853320025e-06
++        ],
++        [
++          2030.4588868300539,
++          6.330988071567845e-07
++        ],
++        [
++          2030.8370509254155,
++          105.81600663275799
++        ],
++        [
++          1544.1417160850392,
++          282.93899407136905
++        ]
++      ],
++      "target_center_px": [
++        1696.2206126040012,
++        101.95218671513108
++      ],
++      "homography_piece_to_source": [
++        [
++          1.0,
++          9.012026606407868e-10,
++          1351.1967518120302
++        ],
++        [
++          -9.012026997911198e-10,
++          1.0,
++          -19.999998754748802
++        ],
++        [
++          0.0,
++          0.0,
++          1.0
++        ]
++      ],
++      "H_rectified_to_assembly": [
++        [
++          -0.00026849502154714747,
++          -0.00026209033679386307,
++          1.4490968814018133
++        ],
++        [
++          0.000262090336793863,
++          -0.0002684950215471475,
++          0.35566544317891874
++        ],
++        [
++          0.0,
++          0.0,
++          0.00037520783794966876
++        ]
++      ],
++      "rotation_deg": 135.6915825665534,
++      "rotation_frame": "rectified_table_to_assembly_clockwise",
++      "scan_center_rectified_px": [
++        958.972,
++        2118.287
++      ],
++      "scan_polygon_rectified_px": [
++        [
++          722.223,
++          1881.785
++        ],
++        [
++          1194.221,
++          2095.004
++        ],
++        [
++          1120.34,
++          2418.278
++        ],
++        [
++          648.578,
++          1957.77
++        ]
++      ],
++      "align_with_placed_pieces": [
++        "S05"
++      ],
++      "start_new_component": false,
++      "confidence": null,
++      "extraction_quality": 0.931891,
++      "needs_manual_review": false,
++      "step_image": "steps/16.png",
++      "target_polygon_mm": [
++        [
++          171.39959397875674,
++          1.534034481665003e-07
++        ],
++        [
++          253.80736085375673,
++          7.913735089459806e-08
++        ],
++        [
++          253.85463136567694,
++          13.227000829094749
++        ],
++        [
++          193.0177145106299,
++          35.36737425892113
++        ]
++      ],
++      "target_center_mm": [
++        212.02757657550015,
++        12.744023339391385
++      ]
++    }
++  ]
++}
+diff --git a/tests/test_stage4_assembly.py b/tests/test_stage4_assembly.py
+new file mode 100644
+index 0000000..d0977e3
+--- /dev/null
++++ b/tests/test_stage4_assembly.py
+@@ -0,0 +1,400 @@
++"""Independent pixel fixtures and real Stage 2/3 hand-off regression tests."""
++
++import copy
++import json
++import math
++import subprocess
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++
++import numpy as np
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "stage4_assembly"))
++from assemble import (  # noqa: E402
++    DEFAULT_PIECES,
++    DEFAULT_PLACEMENTS,
++    DEFAULT_REFERENCE,
++    Fragment,
++    assemble,
++    color_correct,
++    image_to_base,
++    resolve_config,
++    shared_edge_length,
++    transform,
++    warp_fragment,
++)
++from jigsaw_common.io import imread, imwrite  # noqa: E402
++
++
++def write(path, data):
++    path.write_text(json.dumps(data), encoding="utf-8")
++
++
++class AssemblyTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.tmp.cleanup)
++        self.root = Path(self.tmp.name) / "中文交接"
++        self.root.mkdir()
++        self.output = self.root / "out"
++        self.pieces_path = self.root / "pieces.json"
++        self.poses_path = self.root / "poses.json"
++        self.reference_path = self.root / "reference.png"
++        self.config = {"color_correction": False, "adjacency_tolerance_px": 0.5}
++        # A known 20x8 RGB field split into two 10x8 rectangles. PNG pixels
++        # include asymmetric padding; table coordinates have a 30 degree tilt.
++        y, x = np.mgrid[:8, :20]
++        self.expected = np.stack(
++            [30 + 3 * x + 2 * y, 80 + 5 * y + 2 * x, 120 + 2 * x - y], axis=-1
++        ).astype(np.uint8)
++        imwrite(self.reference_path, self.expected)
++        self.manifest = {
++            "schema_version": "1.0",
++            "session_id": "fixture",
++            "coordinate_system": "rectified_px",
++            "piece_scale": 1,
++            "px_per_mm": [2, 2],
++            "detected_piece_count": 2,
++            "expected_piece_count": 2,
++            "pieces": [],
++        }
++        self.result = {
++            "schema": "polygon-assembly-result/v2",
++            "coordinateSystem": "image",
++            "unit": "rectified_px",
++            "status": "feasible",
++            "rectangle": {"width": 20, "height": 8},
++            "placements": [],
++        }
++        base = np.array([[0, 0], [10, 0], [10, 8], [0, 8]], float)
++        theta = math.radians(30)
++        table_to_base = np.array(
++            [
++                [math.cos(theta), math.sin(theta), -30],
++                [-math.sin(theta), math.cos(theta), -10],
++                [0, 0, 1],
++            ],
++            float,
++        )
++        offset = np.array([[1, 0, 7], [0, 1, 5], [0, 0, 1]], float)
++        for i in range(2):
++            id_ = f"S{i + 1:02d}"
++            rgba = np.zeros((19, 27, 4), np.uint8)
++            rgba[5:13, 7:17, :3] = self.expected[:, i * 10 : (i + 1) * 10]
++            rgba[5:13, 7:17, 3] = 255
++            imwrite(self.root / f"{id_}.png", rgba)
++            imwrite(self.root / f"{id_}_mask.png", rgba[:, :, 3])
++            self.manifest["pieces"].append(
++                {
++                    "piece_id": id_,
++                    "rgba_path": f"{id_}.png",
++                    "mask_path": f"{id_}_mask.png",
++                    "base_edge_corners_px": base.tolist(),
++                    "image_corners_px": (base + [7, 5]).tolist(),
++                    "piece_size_px": [27, 19],
++                    "rectified_to_base_edge_matrix": table_to_base.tolist(),
++                    "rectified_to_piece_matrix": (offset @ table_to_base).tolist(),
++                    "center_px": transform(
++                        np.linalg.inv(table_to_base), np.array([[5, 4]])
++                    )[0].tolist(),
++                    "corners_px": transform(
++                        np.linalg.inv(table_to_base), base
++                    ).tolist(),
++                    "quality": 0.99,
++                }
++            )
++            self.result["placements"].append(
++                {"id": id_, "rotationDeg": 0, "origin": [i * 10, 0]}
++            )
++        self.flush()
++
++    def flush(self):
++        write(self.pieces_path, self.manifest)
++        write(self.poses_path, self.result)
++
++    def run_assembly(self, **kwargs):
++        return assemble(
++            self.pieces_path, self.poses_path, self.output, config=self.config, **kwargs
++        )
++
++    def test_exact_pixels_with_nonzero_png_offset_and_manual_table_rotation(self):
++        report = self.run_assembly(reference_path=self.reference_path)
++        np.testing.assert_array_equal(
++            imread(self.output / "assembled.png"), self.expected
++        )
++        self.assertEqual(report["geometry"]["coverage_fraction"], 1)
++        self.assertEqual(report["metrics"]["raw"]["ssim_gray"], 1)
++        self.assertTrue(report["metrics"]["raw"]["identical"])
++        self.assertIsNone(report["metrics"]["raw"]["psnr_db"])
++        plan = json.loads((self.output / "placement_plan.json").read_text())
++        self.assertEqual([p["scan_piece_id"] for p in plan["slot"]], ["S01", "S02"])
++        self.assertAlmostEqual(plan["slot"][0]["rotation_deg"], -30)
++        self.assertEqual(plan["slot"][1]["align_with_placed_pieces"], ["S01"])
++        self.assertEqual(plan["rectangle_mm"], [10, 4])
++        self.assertTrue((self.output / "steps/02.png").is_file())
++        self.assertTrue((self.output / "piece_index.png").is_file())
++        self.assertFalse(report["reference_used"]["pixels_for_gap_filling"])
++
++    def test_negative_base_x_and_fallback_corner_offsets(self):
++        base = np.array([[0, 0], [12, 0], [11, 6], [-2, 4]], float)
++        piece = {"image_corners_px": (base + [9, 5]).tolist()}
++        h = image_to_base(piece, base)
++        np.testing.assert_allclose(
++            transform(h, np.array([[9, 5], [7, 9]])), [[0, 0], [-2, 4]]
++        )
++        piece["image_corners_px"][2][0] += 1
++        with self.assertRaisesRegex(ValueError, "crop translation"):
++            image_to_base(piece, base)
++
++    def test_no_black_halo_from_fractional_alpha_warp(self):
++        rgba = np.zeros((6, 6, 4), np.uint8)
++        rgba[2:4, 2:4] = [30, 120, 240, 255]
++        h = np.array([[1, 0, 0.5], [0, 1, 0.5], [0, 0, 1]], float)
++        f = Fragment(
++            "S", {}, rgba, h, np.array([[0, 0], [6, 0], [6, 6], [0, 6]], float)
++        )
++        color, alpha, _ = warp_fragment(f, (7, 7), resolve_config(None))
++        np.testing.assert_allclose(
++            color[alpha > 0], np.tile([30, 120, 240], ((alpha > 0).sum(), 1)), atol=1e-4
++        )
++
++    def test_holes_remain_holes_even_with_reference(self):
++        self.result["placements"][1]["origin"] = [12, 0]
++        self.result["rectangle"]["width"] = 22
++        self.flush()
++        reference = np.full((8, 22, 3), 170, np.uint8)
++        imwrite(self.reference_path, reference)
++        self.run_assembly(reference_path=self.reference_path, orientation="0")
++        assembled = imread(self.output / "assembled.png")
++        self.assertTrue(np.all(assembled[:, 10:12] == 0))
++        self.assertTrue(
++            np.all(imread(self.output / "coverage_mask.png")[:, 10:12] == 0)
++        )
++
++    def test_assignments_protocol_reconstructs_the_same_pixels(self):
++        self.result = {"schema_version": "1.0", "assignments": [], "unassigned": []}
++        layout = {"schema_version": "1.0", "source_size_px": [20, 8], "pieces": []}
++        for i in range(2):
++            layout["pieces"].append(
++                {
++                    "piece_id": f"P{i + 1:02d}",
++                    "polygon_px": [
++                        [i * 10, 0],
++                        [(i + 1) * 10, 0],
++                        [(i + 1) * 10, 8],
++                        [i * 10, 8],
++                    ],
++                }
++            )
++            self.result["assignments"].append(
++                {
++                    "scan_piece_id": f"S{i + 1:02d}",
++                    "source_piece_id": f"P{i + 1:02d}",
++                    "homography_piece_to_source": [
++                        [1, 0, i * 10 - 7],
++                        [0, 1, -5],
++                        [0, 0, 1],
++                    ],
++                    "confidence": 0.95,
++                    "status": "accepted",
++                }
++            )
++        layout_path = self.root / "layout.json"
++        write(layout_path, layout)
++        self.flush()
++        report = self.run_assembly(
++            layout_path=layout_path, reference_path=self.reference_path
++        )
++        self.assertEqual(report["input_mode"], "reference_assignments")
++        np.testing.assert_array_equal(
++            imread(self.output / "assembled.png"), self.expected
++        )
++        plan = json.loads((self.output / "placement_plan.json").read_text())
++        self.assertIsNone(plan["rectangle_mm"])
++
++    def test_assignment_rectified_homography_is_composed_with_crop_inverse(self):
++        layout_path = self.root / "layout.json"
++        layout = {"schema_version": "1.0", "source_size_px": [20, 8], "pieces": []}
++        assignments = []
++        for i, p in enumerate(self.manifest["pieces"]):
++            h = np.array([[1, 0, i * 10 - 7], [0, 1, -5], [0, 0, 1]]) @ np.array(
++                p["rectified_to_piece_matrix"]
++            )
++            assignments.append(
++                {
++                    "scan_piece_id": p["piece_id"],
++                    "source_piece_id": f"P{i}",
++                    "H_scan_to_source": h.tolist(),
++                    "transform_source_frame": "rectified_px",
++                }
++            )
++            layout["pieces"].append(
++                {
++                    "piece_id": f"P{i}",
++                    "polygon_px": [
++                        [i * 10, 0],
++                        [(i + 1) * 10, 0],
++                        [(i + 1) * 10, 8],
++                        [i * 10, 8],
++                    ],
++                }
++            )
++        self.result = {"schema_version": "1.0", "assignments": assignments}
++        self.flush()
++        write(layout_path, layout)
++        self.run_assembly(layout_path=layout_path)
++        np.testing.assert_array_equal(
++            imread(self.output / "assembled.png"), self.expected
++        )
++
++    def test_incomplete_duplicate_failed_or_wrong_unit_results_are_rejected(self):
++        original = copy.deepcopy(self.result)
++        for mutate in (
++            lambda r: r["placements"].pop(),
++            lambda r: r["placements"].append(r["placements"][0]),
++            lambda r: r.update(status="unknown"),
++            lambda r: r.update(unit="mm"),
++            lambda r: r.update(session_id="other"),
++            lambda r: r["placements"][0].update(rotationDeg=float("nan")),
++        ):
++            self.result = copy.deepcopy(original)
++            mutate(self.result)
++            self.flush()
++            with (
++                self.subTest(result=self.result),
++                self.assertRaises((ValueError, KeyError)),
++            ):
++                self.run_assembly()
++            self.assertFalse(self.output.exists())
++
++    def test_no_input_overwrite(self):
++        before = self.pieces_path.read_bytes()
++        with self.assertRaisesRegex(ValueError, "contain input"):
++            assemble(self.pieces_path, self.poses_path, self.root, config=self.config)
++        self.assertEqual(before, self.pieces_path.read_bytes())
++
++    def test_empty_alpha_is_rejected_before_writing(self):
++        imwrite(self.root / "S01_mask.png", np.zeros((19, 27), np.uint8))
++        with self.assertRaisesRegex(ValueError, "empty alpha"):
++            self.run_assembly()
++        self.assertFalse(self.output.exists())
++
++    def test_manual_review_is_not_hidden_and_no_steps_option(self):
++        self.manifest["manual_review"] = ["S02"]
++        self.manifest["pieces"][1]["needs_manual_review"] = True
++        self.config["write_steps"] = False
++        self.flush()
++        report = self.run_assembly()
++        self.assertEqual(report["status"], "review")
++        self.assertTrue(any("S02" in w for w in report["warnings"]))
++        plan = json.loads((self.output / "placement_plan.json").read_text())
++        self.assertTrue(plan["slot"][1]["needs_manual_review"])
++        self.assertIsNone(plan["slot"][1]["step_image"])
++        self.assertFalse((self.output / "steps").exists())
++
++    def test_rerun_removes_obsolete_reference_and_step_products(self):
++        self.run_assembly(reference_path=self.reference_path)
++        self.assertTrue((self.output / "comparison.png").exists())
++        self.config["write_steps"] = False
++        self.run_assembly()
++        self.assertFalse((self.output / "comparison.png").exists())
++        self.assertFalse((self.output / "steps").exists())
++
++    def test_contact_at_one_corner_does_not_count_as_shared_side(self):
++        a = np.array([[0, 0], [10, 0], [10, 10], [0, 10]], float)
++        b = a + [10, 10]
++        self.assertEqual(shared_edge_length(a, b, 0.5), 0)
++        b = a + [10, 0]
++        self.assertAlmostEqual(shared_edge_length(a, b, 0.5), 10)
++
++    def test_conservative_correction_reduces_brightness_error(self):
++        y, x = np.mgrid[:20, :20]
++        src = np.repeat((70 + x + y)[:, :, None], 3, axis=2).astype(np.float32)
++        ref = (src + 15).astype(np.uint8)
++        corrected, params = color_correct(
++            src, ref, np.ones((20, 20), np.float32), resolve_config(None)
++        )
++        self.assertTrue(params["applied"])
++        self.assertLess(np.mean((corrected - ref) ** 2), np.mean((src - ref) ** 2))
++        self.assertLessEqual(max(abs(v) for v in params["mean_shift_Lab"]), 5.0001)
++        self.assertTrue(all(0.9 <= v <= 1.125 for v in params["gain"]))
++
++    def test_explicit_global_turn_also_rotates_plan_geometry(self):
++        report = self.run_assembly(orientation="90")
++        self.assertEqual(report["canvas_size_px"], [8, 20])
++        plan = json.loads((self.output / "placement_plan.json").read_text())
++        # Original first rectangle center (5,4) -> (8-4,5).
++        slot = next(p for p in plan["slot"] if p["scan_piece_id"] == "S01")
++        np.testing.assert_allclose(slot["target_center_px"], [4, 5])
++        self.assertAlmostEqual(slot["rotation_deg"], 60)
++
++    def test_bad_config_and_excessive_canvas_fail_before_writing(self):
++        for config in (
++            {"feather_px": float("nan")},
++            {"blend_mode": "multiband"},
++            {"color_strength": 2},
++            {"max_canvas_pixels": 10},
++        ):
++            with self.subTest(config=config), self.assertRaises(ValueError):
++                assemble(self.pieces_path, self.poses_path, self.output, config=config)
++        self.assertFalse(self.output.exists())
++
++    def test_cli_reports_invalid_input_exit_code(self):
++        self.result["status"] = "infeasible"
++        self.flush()
++        p = subprocess.run(
++            [
++                sys.executable,
++                str(ROOT / "stage4_assembly/assemble.py"),
++                "--pieces",
++                str(self.pieces_path),
++                "--placements",
++                str(self.poses_path),
++                "--output",
++                str(self.output),
++            ],
++            capture_output=True,
++            text=True,
++        )
++        self.assertEqual(p.returncode, 2)
++        self.assertIn("Stage 4 failed", p.stderr)
++
++
++class RealHandoffTests(unittest.TestCase):
++    @unittest.skipUnless(
++        DEFAULT_PIECES.is_file() and DEFAULT_PLACEMENTS.is_file(),
++        "real hand-off not available",
++    )
++    def test_real_16_piece_geometry_textures_and_upstream_review(self):
++        with tempfile.TemporaryDirectory() as directory:
++            report = assemble(
++                DEFAULT_PIECES,
++                DEFAULT_PLACEMENTS,
++                Path(directory),
++                reference_path=DEFAULT_REFERENCE,
++                config={"write_steps": False},
++            )
++            self.assertEqual(report["piece_count"], 16)
++            self.assertEqual(report["board_rotation_clockwise_deg"], 180)
++            self.assertAlmostEqual(
++                report["geometry"]["coverage_fraction"], 0.9944657281801332, places=7
++            )
++            self.assertEqual(report["status"], "review")
++            self.assertGreater(report["metrics"]["corrected"]["ssim_gray"], 0.7)
++            self.assertGreater(
++                report["metrics"]["corrected"]["psnr_db"],
++                report["metrics"]["raw"]["psnr_db"],
++            )
++            plan = json.loads((Path(directory) / "placement_plan.json").read_text())
++            self.assertEqual(len({s["scan_piece_id"] for s in plan["slot"]}), 16)
++            self.assertTrue(
++                all(s["align_with_placed_pieces"] for s in plan["slot"][1:])
++            )
++            self.assertTrue(all(s["source_piece_id"] is None for s in plan["slot"]))
++
++
++if __name__ == "__main__":
++    unittest.main()

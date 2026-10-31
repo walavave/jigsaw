@@ -35,10 +35,6 @@ tmp/
 # Generated background scenes (~130 MB; regenerate with backgrounds/make_backgrounds.py)
 backgrounds/output/
 
-# Stage 4 generated reconstruction, reports, and manual placement images
-stage4_assembly/output/*
-!stage4_assembly/output/README.md
-
 # Optional deep-learning model weights
 checkpoints/
 weights/
